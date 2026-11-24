@@ -1,8 +1,12 @@
 package com.kirin.bilitv.ui.shell
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,20 +74,23 @@ internal fun AppSidebar(
   accountFocusRequester: FocusRequester,
   navFocusRequesters: Map<AppDestination, FocusRequester>,
   onAccountSelected: () -> Unit,
+  onExitApp: () -> Unit,
   onDestinationSelected: (AppDestination) -> Unit,
   shouldAutoConfirmDestination: (AppDestination) -> Boolean,
   onMoveRight: (AppDestination) -> Boolean,
 ) {
+  val ui = LocalUiMetrics.current
+  val exitFocusRequester = remember { FocusRequester() }
   val homeColors = LocalHomeColors.current
   val performancePolicy = LocalBiliPerformancePolicy.current
   val cinematicVisualsEnabled = performancePolicy.cinematicVisualEffectsEnabled
   val liquidGlassBackdrop = LocalLiquidGlassBackdrop.current
   val liquidGlassEnabled = cinematicVisualsEnabled && performancePolicy.liquidGlassCardsEnabled && liquidGlassBackdrop != null
   val sidebarShape = RoundedCornerShape(
-    topStart = BiliRadius.Sidebar,
-    topEnd = BiliRadius.Sidebar,
-    bottomEnd = BiliRadius.Sidebar,
-    bottomStart = BiliRadius.Sidebar,
+    topStart = ui.dp(BiliRadius.Sidebar),
+    topEnd = ui.dp(BiliRadius.Sidebar),
+    bottomEnd = ui.dp(BiliRadius.Sidebar),
+    bottomStart = ui.dp(BiliRadius.Sidebar),
   )
   val sidebarBackground = if (cinematicVisualsEnabled) {
     Brush.horizontalGradient(
@@ -109,7 +116,7 @@ internal fun AppSidebar(
   }
   Column(
     modifier = Modifier
-      .width(BiliSizing.SidebarWidth)
+      .width(ui.dp(BiliSizing.SidebarWidth).coerceAtLeast(BiliSizing.MinimumTouchTarget + ui.dp(BiliSpacing.Md) * 2))
       .fillMaxHeight()
       .clip(sidebarShape)
       .then(
@@ -119,15 +126,15 @@ internal fun AppSidebar(
             shape = sidebarShape,
             surfaceColor = homeColors.sidebarSurface.copy(alpha = BiliFocus.HomeSidebarLiquidGlassSurfaceAlpha),
             borderColor = sidebarBorder,
-            borderWidth = BiliFocus.RestingBorderWidth,
+            borderWidth = ui.dp(BiliFocus.RestingBorderWidth),
           )
         } else {
           Modifier
             .background(sidebarBackground)
-            .border(BorderStroke(BiliFocus.RestingBorderWidth, sidebarBorder), sidebarShape)
+            .border(BorderStroke(ui.dp(BiliFocus.RestingBorderWidth), sidebarBorder), sidebarShape)
         },
       )
-      .padding(horizontal = BiliSpacing.Md, vertical = BiliSizing.ContentPadding),
+      .padding(horizontal = ui.dp(BiliSpacing.Md), vertical = ui.dp(BiliSizing.ContentPadding)),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     if (userSession.isLoggedIn) {
@@ -144,18 +151,22 @@ internal fun AppSidebar(
         },
       )
     }
-    Spacer(modifier = Modifier.height(BiliSizing.SidebarNavGroupTopPadding))
+    Spacer(modifier = Modifier.height(ui.dp(BiliSizing.SidebarNavGroupTopPadding)))
     Column(
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(BiliSizing.SidebarNavGroupSpacing),
+      verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSizing.SidebarNavGroupSpacing)),
     ) {
       AppDestination.entries.forEach { destination ->
         AppNavItem(
           destination = destination,
           selected = !accountSelected && selectedDestination == destination,
           autoConfirmOnFocus = shouldAutoConfirmDestination(destination),
-          modifier = Modifier.focusRequester(navFocusRequesters.getValue(destination)),
+          modifier = Modifier
+            .focusRequester(navFocusRequesters.getValue(destination))
+            .focusProperties {
+              if (destination == AppDestination.Settings) down = exitFocusRequester
+            },
           onClick = {
             onDestinationSelected(destination)
           },
@@ -165,7 +176,13 @@ internal fun AppSidebar(
         )
       }
     }
-    Spacer(modifier = Modifier.weight(1f))
+    AppExitButton(
+      onExitApp = onExitApp,
+      modifier = Modifier.focusRequester(exitFocusRequester).focusProperties {
+        up = navFocusRequesters.getValue(AppDestination.Settings)
+      },
+      onMoveRight = { onMoveRight(selectedDestination) },
+    )
   }
 }
 
@@ -178,6 +195,7 @@ private fun AccountNavItem(
   onClick: () -> Unit,
   onMoveRight: () -> Boolean,
 ) {
+  val ui = LocalUiMetrics.current
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
   val cinematicVisualsEnabled = performancePolicy.cinematicVisualEffectsEnabled
@@ -195,7 +213,7 @@ private fun AccountNavItem(
     } else {
       null
     },
-    focusedBorderWidth = if (cinematicVisualsEnabled) BiliFocus.RestingBorderWidth else BiliFocus.BorderWidth,
+    focusedBorderWidth = if (cinematicVisualsEnabled) ui.dp(BiliFocus.RestingBorderWidth) else ui.dp(BiliFocus.BorderWidth),
     focusedBackgroundColor = if (cinematicVisualsEnabled) {
       homeColors.textPrimary.copy(alpha = BiliFocus.CinematicFocusedBackgroundAlpha)
     } else {
@@ -214,7 +232,7 @@ private fun AccountNavItem(
     },
     modifier = modifier
       .fillMaxWidth()
-      .height(BiliSizing.NavItemHeight)
+      .height(ui.dp(BiliSizing.NavItemHeight))
       .onPreviewKeyEvent { event ->
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
           onMoveRight()
@@ -240,10 +258,11 @@ private fun AccountNavItem(
 
 @Composable
 private fun AccountStatusAvatar(userSession: UserSession) {
+  val ui = LocalUiMetrics.current
   Box(
     modifier = Modifier
       .fillMaxWidth()
-      .height(BiliSizing.NavItemHeight)
+      .height(ui.dp(BiliSizing.NavItemHeight))
       .focusProperties { canFocus = false },
     contentAlignment = Alignment.Center,
   ) {
@@ -253,6 +272,7 @@ private fun AccountStatusAvatar(userSession: UserSession) {
 
 @Composable
 private fun AccountAvatar(userSession: UserSession) {
+  val ui = LocalUiMetrics.current
   val context = LocalContext.current
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
@@ -265,7 +285,7 @@ private fun AccountAvatar(userSession: UserSession) {
   val face = userSession.face.orEmpty()
 
   Box(
-    modifier = Modifier.size(BiliSizing.AccountAvatarContainerSize),
+    modifier = Modifier.size(ui.dp(BiliSizing.AccountAvatarContainerSize)),
     contentAlignment = Alignment.Center,
   ) {
     if (userSession.isLoggedIn && face.isNotBlank()) {
@@ -292,7 +312,7 @@ private fun AccountAvatar(userSession: UserSession) {
         error = fallbackPainter,
         modifier = Modifier
           .align(Alignment.Center)
-          .size(BiliSizing.AccountAvatarSize)
+          .size(ui.dp(BiliSizing.AccountAvatarSize))
           .clip(CircleShape)
           .background(BiliColors.SurfaceElevated),
       )
@@ -301,7 +321,7 @@ private fun AccountAvatar(userSession: UserSession) {
         painter = painterResource(R.drawable.ic_nav_account),
         contentDescription = stringResource(R.string.nav_login),
         tint = if (userSession.isLoggedIn) homeColors.accent else homeColors.textSecondary,
-        modifier = Modifier.size(BiliSizing.NavIconSize),
+        modifier = Modifier.size(ui.dp(BiliSizing.NavIconSize)),
       )
     }
 
@@ -309,8 +329,8 @@ private fun AccountAvatar(userSession: UserSession) {
       Box(
         modifier = Modifier
           .align(Alignment.BottomEnd)
-          .offset(x = BiliSpacing.Xs, y = BiliSpacing.Xs)
-          .size(BiliSizing.AccountVipBadgeSize)
+          .offset(x = ui.dp(BiliSpacing.Xs), y = ui.dp(BiliSpacing.Xs))
+          .size(ui.dp(BiliSizing.AccountVipBadgeSize))
           .clip(CircleShape)
           .background(BiliColors.BiliPink),
         contentAlignment = Alignment.Center,
@@ -318,8 +338,8 @@ private fun AccountAvatar(userSession: UserSession) {
         Text(
           text = stringResource(R.string.account_vip_badge),
           color = BiliColors.TextPrimary,
-          fontSize = BiliTypography.AccountVipBadge,
-          lineHeight = BiliTypography.AccountVipBadgeLineHeight,
+          fontSize = ui.sp(BiliTypography.AccountVipBadge),
+          lineHeight = ui.sp(BiliTypography.AccountVipBadgeLineHeight),
           fontWeight = FontWeight.Bold,
           textAlign = TextAlign.Center,
         )
@@ -337,13 +357,14 @@ private fun AppNavItem(
   onClick: () -> Unit,
   onMoveRight: () -> Boolean,
 ) {
+  val ui = LocalUiMetrics.current
   var focused by remember { mutableStateOf(false) }
   val homeColors = LocalHomeColors.current
   val performancePolicy = LocalBiliPerformancePolicy.current
   val cinematicVisualsEnabled = performancePolicy.cinematicVisualEffectsEnabled
 
   BiliFocusableSurface(
-    shape = RoundedCornerShape(BiliRadius.Pill),
+    shape = RoundedCornerShape(ui.dp(BiliRadius.Pill)),
     shadowOnFocus = !cinematicVisualsEnabled,
     focusedScale = if (cinematicVisualsEnabled) BiliFocus.CinematicNavScale else BiliFocus.CardScale,
     focusedBorderColor = if (cinematicVisualsEnabled) {
@@ -356,7 +377,7 @@ private fun AppNavItem(
     } else {
       null
     },
-    focusedBorderWidth = if (cinematicVisualsEnabled) BiliFocus.RestingBorderWidth else BiliFocus.BorderWidth,
+    focusedBorderWidth = if (cinematicVisualsEnabled) ui.dp(BiliFocus.RestingBorderWidth) else ui.dp(BiliFocus.BorderWidth),
     focusedBackgroundColor = if (cinematicVisualsEnabled) {
       homeColors.textPrimary.copy(alpha = BiliFocus.CinematicFocusedBackgroundAlpha)
     } else {
@@ -375,7 +396,7 @@ private fun AppNavItem(
     },
     modifier = modifier
       .fillMaxWidth()
-      .height(BiliSizing.NavItemHeight)
+      .height(ui.dp(BiliSizing.NavItemHeight))
       .onPreviewKeyEvent { event ->
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
           onMoveRight()
@@ -394,7 +415,7 @@ private fun AppNavItem(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .padding(BiliSpacing.Sm),
+        .padding(ui.dp(BiliSpacing.Sm)),
       contentAlignment = Alignment.Center,
     ) {
       Icon(
@@ -402,8 +423,8 @@ private fun AppNavItem(
         contentDescription = stringResource(destination.titleRes),
         tint = if (selected || focused) homeColors.accent else homeColors.textSecondary,
         modifier = Modifier
-          .width(BiliSizing.NavIconSize)
-          .height(BiliSizing.NavIconSize),
+          .width(ui.dp(BiliSizing.NavIconSize))
+          .height(ui.dp(BiliSizing.NavIconSize)),
       )
     }
   }

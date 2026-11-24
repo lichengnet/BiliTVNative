@@ -1,15 +1,20 @@
 package com.kirin.bilitv.ui.search
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -51,6 +57,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.PlatformTextStyle
@@ -62,6 +69,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kirin.bilitv.R
 import com.kirin.bilitv.core.model.VideoSummary
+import com.kirin.bilitv.ui.common.AdaptiveTwoPaneLayout
+import com.kirin.bilitv.ui.home.adaptiveGridColumns
 import com.kirin.bilitv.ui.common.FeedStatusScreen
 import com.kirin.bilitv.ui.common.VideoGridSkeleton
 import com.kirin.bilitv.ui.focus.BiliFocusableSurface
@@ -115,6 +124,8 @@ internal fun SearchScreen(
       viewModel = viewModel,
       viewState = viewState,
       focusState = focusState,
+      restoreFocusRequestKey = restoreFocusRequestKey,
+      onRestoreFocusHandled = onRestoreFocusHandled,
       onVideoSelected = onVideoSelected,
     )
     return
@@ -192,8 +203,11 @@ private fun SearchTouchScreen(
   viewModel: SearchViewModel,
   viewState: SearchViewState,
   focusState: SearchFocusState,
+  restoreFocusRequestKey: Int,
+  onRestoreFocusHandled: (Int) -> Unit,
   onVideoSelected: (VideoSummary) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val inputFocusRequester = remember { FocusRequester() }
   val focusManager = LocalFocusManager.current
 
@@ -205,21 +219,21 @@ private fun SearchTouchScreen(
     focusManager.clearFocus()
   }
 
-  LaunchedEffect(Unit) {
+  LaunchedEffect(viewState.activeQuery, restoreFocusRequestKey) {
+    if (viewState.activeQuery != null) return@LaunchedEffect
     withFrameNanos { }
-    runCatching {
-      inputFocusRequester.requestFocus()
-    }
+    runCatching { inputFocusRequester.requestFocus() }
+    if (restoreFocusRequestKey > 0) onRestoreFocusHandled(restoreFocusRequestKey)
   }
 
   Column(
     modifier = Modifier
       .fillMaxSize()
       .padding(
-        start = BiliSizing.ContentPadding,
-        top = BiliSizing.SearchTouchTopPadding,
-        end = BiliSizing.ContentPadding,
-        bottom = BiliSizing.ContentPadding,
+        start = ui.dp(BiliSizing.ContentPadding),
+        top = ui.dp(BiliSizing.SearchTouchTopPadding),
+        end = ui.dp(BiliSizing.ContentPadding),
+        bottom = ui.dp(BiliSizing.ContentPadding),
       ),
   ) {
     SearchTouchInputBar(
@@ -234,7 +248,7 @@ private fun SearchTouchScreen(
       },
       onSearch = ::submitSearch,
     )
-    Spacer(modifier = Modifier.height(BiliSizing.SearchTouchContentTopPadding))
+    Spacer(modifier = Modifier.height(ui.dp(BiliSizing.SearchTouchContentTopPadding)))
     val query = viewState.activeQuery
     if (query == null) {
       SearchTouchSuggestionContent(
@@ -251,6 +265,8 @@ private fun SearchTouchScreen(
         viewModel = viewModel,
         viewState = viewState,
         focusState = focusState,
+        restoreFocusRequestKey = restoreFocusRequestKey,
+        onRestoreFocusHandled = onRestoreFocusHandled,
         onBackToSuggestions = viewModel::backToKeyboard,
         onVideoSelected = onVideoSelected,
         modifier = Modifier.weight(1f),
@@ -260,37 +276,33 @@ private fun SearchTouchScreen(
 }
 
 @Composable
-private fun SearchTouchInputBar(
+internal fun SearchTouchInputBar(
   searchText: String,
   inputFocusRequester: FocusRequester,
   onTextChange: (String) -> Unit,
   onClear: () -> Unit,
   onSearch: (String) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
-  val shape = RoundedCornerShape(BiliRadius.Card)
-  Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .height(BiliSizing.SearchTouchInputHeight),
-    horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
+  val shape = RoundedCornerShape(ui.dp(BiliRadius.Card))
+  SearchTouchInputLayout(modifier = Modifier.fillMaxWidth().testTag("search_touch_input_bar")) {
     BasicTextField(
       value = searchText,
       onValueChange = onTextChange,
       modifier = Modifier
-        .weight(1f)
-        .fillMaxHeight()
+        .testTag("search_touch_input")
+        .fillMaxWidth()
+        .heightIn(min = ui.dp(BiliSizing.SearchTouchInputHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
         .focusRequester(inputFocusRequester)
         .clip(shape)
         .background(homeColors.glassSurfaceStrong, shape)
-        .border(BorderStroke(BiliFocus.RestingBorderWidth, homeColors.glassBorder), shape)
-        .padding(horizontal = BiliSpacing.Lg),
+        .border(BorderStroke(ui.dp(BiliFocus.RestingBorderWidth), homeColors.glassBorder), shape)
+        .padding(horizontal = ui.dp(BiliSpacing.Lg), vertical = ui.dp(BiliSpacing.Sm)),
       singleLine = true,
       textStyle = TextStyle(
         color = homeColors.textPrimary,
-        fontSize = BiliTypography.SearchInput,
+        fontSize = ui.sp(BiliTypography.SearchInput),
         fontWeight = FontWeight.Bold,
       ),
       cursorBrush = SolidColor(homeColors.accent),
@@ -302,14 +314,14 @@ private fun SearchTouchInputBar(
       ),
       decorationBox = { innerTextField ->
         Box(
-          modifier = Modifier.fillMaxSize(),
+          modifier = Modifier.fillMaxWidth(),
           contentAlignment = Alignment.CenterStart,
         ) {
           if (searchText.isBlank()) {
             Text(
               text = stringResource(R.string.search_input_placeholder),
               color = homeColors.textTertiary,
-              fontSize = BiliTypography.SearchInput,
+              fontSize = ui.sp(BiliTypography.SearchInput),
               fontWeight = FontWeight.Bold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
@@ -322,11 +334,13 @@ private fun SearchTouchInputBar(
     if (searchText.isNotBlank()) {
       SearchTouchActionButton(
         label = stringResource(R.string.search_action_clear),
+        modifier = Modifier.testTag("search_touch_clear"),
         onClick = onClear,
       )
     }
     SearchTouchActionButton(
       label = stringResource(R.string.search_action_search),
+      modifier = Modifier.testTag("search_touch_search"),
       action = true,
       onClick = {
         onSearch(searchText)
@@ -339,14 +353,16 @@ private fun SearchTouchInputBar(
 private fun SearchTouchActionButton(
   label: String,
   action: Boolean = false,
+  modifier: Modifier = Modifier,
   onClick: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
-  val shape = RoundedCornerShape(BiliRadius.Card)
+  val shape = RoundedCornerShape(ui.dp(BiliRadius.Card))
   Box(
-    modifier = Modifier
-      .width(BiliSizing.SearchTouchActionButtonWidth)
-      .fillMaxHeight()
+    modifier = modifier
+      .fillMaxWidth()
+      .heightIn(min = ui.dp(BiliSizing.SearchTouchInputHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
       .clip(shape)
       .background(
         color = if (action) homeColors.accent else homeColors.glassSurfaceStrong,
@@ -354,20 +370,22 @@ private fun SearchTouchActionButton(
       )
       .border(
         BorderStroke(
-          BiliFocus.RestingBorderWidth,
+          ui.dp(BiliFocus.RestingBorderWidth),
           if (action) BiliColors.Transparent else homeColors.glassBorder,
         ),
         shape,
       )
-      .clickable(onClick = onClick),
+      .clickable(onClick = onClick)
+      .padding(horizontal = ui.dp(BiliSpacing.Sm), vertical = ui.dp(BiliSpacing.Sm)),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = label,
       color = if (action) BiliColors.TextPrimary else homeColors.textSecondary,
-      fontSize = BiliTypography.BodySmall,
+      fontSize = ui.sp(BiliTypography.BodySmall),
       fontWeight = FontWeight.Bold,
       maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
     )
   }
 }
@@ -381,6 +399,7 @@ private fun SearchTouchSuggestionContent(
   onClearSearchHistory: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   Box(modifier = modifier.fillMaxSize()) {
     when {
       searchText.isBlank() && searchHistory.isEmpty() -> SearchHintText(
@@ -398,16 +417,16 @@ private fun SearchTouchSuggestionContent(
         val homeColors = LocalHomeColors.current
         LazyColumn(
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(vertical = BiliSpacing.Md),
-          verticalArrangement = Arrangement.spacedBy(BiliSpacing.Sm),
+          contentPadding = PaddingValues(vertical = ui.dp(BiliSpacing.Md)),
+          verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Sm)),
         ) {
           item {
             Text(
               text = stringResource(R.string.search_suggestions_title),
               color = homeColors.textSecondary,
-              fontSize = BiliTypography.SectionTitle,
+              fontSize = ui.sp(BiliTypography.SectionTitle),
               fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(bottom = BiliSpacing.Sm),
+              modifier = Modifier.padding(bottom = ui.dp(BiliSpacing.Sm)),
             )
           }
           items(suggestions, key = { suggestion -> suggestion }) { suggestion ->
@@ -431,15 +450,18 @@ private fun SearchTouchResultsView(
   viewModel: SearchViewModel,
   viewState: SearchViewState,
   focusState: SearchFocusState,
+  restoreFocusRequestKey: Int,
+  onRestoreFocusHandled: (Int) -> Unit,
   onBackToSuggestions: () -> Unit,
   onVideoSelected: (VideoSummary) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val firstResultFocusRequester = remember { FocusRequester() }
   val selectedSortFocusRequester = remember { FocusRequester() }
   Column(
     modifier = modifier.fillMaxSize(),
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Lg),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Lg)),
   ) {
     SearchTouchResultsHeader(
       query = query,
@@ -453,7 +475,7 @@ private fun SearchTouchResultsView(
     )
     Box(modifier = Modifier.fillMaxSize()) {
       when (val currentState = viewState.resultState) {
-        SearchResultState.Loading -> VideoGridSkeleton()
+        SearchResultState.Loading -> VideoGridSkeleton(horizontalPadding = ui.dp(BiliSizing.SearchVideoGridHorizontalPadding))
         SearchResultState.Empty -> FeedStatusScreen(message = stringResource(R.string.search_empty))
         is SearchResultState.Failed -> FeedStatusScreen(
           message = stringResource(R.string.search_failed_with_message, currentState.message),
@@ -470,8 +492,8 @@ private fun SearchTouchResultsView(
             focusKey = focusState.focusedResultKey,
             fallbackIndex = focusState.focusedResultIndex,
           ),
-          restoreFocusRequestKey = 0,
-          onRestoreFocusHandled = {},
+          restoreFocusRequestKey = restoreFocusRequestKey,
+          onRestoreFocusHandled = onRestoreFocusHandled,
           focusFirstResult = false,
           onFirstResultFocused = {},
           onFocusedIndexChange = { index, video ->
@@ -498,23 +520,24 @@ private fun SearchTouchResultsHeader(
   selectedOrderKey: String,
   onOrderSelected: (String) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Column(
     modifier = Modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
   ) {
     Text(
       text = stringResource(R.string.search_results_title, convertChineseText(query)),
       color = homeColors.textPrimary,
-      fontSize = BiliTypography.SectionTitle,
+      fontSize = ui.sp(BiliTypography.SectionTitle),
       fontWeight = FontWeight.Bold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
     LazyRow(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
-      contentPadding = PaddingValues(horizontal = BiliSpacing.Xs),
+      horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
+      contentPadding = PaddingValues(horizontal = ui.dp(BiliSpacing.Xs)),
     ) {
       items(SearchSortOptions, key = { option -> option.key }) { option ->
         SearchTouchSortButton(
@@ -535,12 +558,13 @@ private fun SearchTouchSortButton(
   selected: Boolean,
   onSelected: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
-  val shape = RoundedCornerShape(BiliRadius.Pill)
+  val shape = RoundedCornerShape(ui.dp(BiliRadius.Pill))
   Box(
     modifier = Modifier
-      .height(BiliSizing.HomeSectionTabHeight)
-      .widthIn(min = BiliSizing.HomeSectionTabMinWidth)
+      .heightIn(min = ui.dp(BiliSizing.HomeSectionTabHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
+      .widthIn(min = ui.dp(BiliSizing.HomeSectionTabMinWidth))
       .clip(shape)
       .background(
         color = if (selected) homeColors.accent else homeColors.glassSurfaceStrong,
@@ -548,20 +572,20 @@ private fun SearchTouchSortButton(
       )
       .border(
         BorderStroke(
-          BiliFocus.RestingBorderWidth,
+          ui.dp(BiliFocus.RestingBorderWidth),
           if (selected) BiliColors.Transparent else homeColors.glassBorder,
         ),
         shape,
       )
       .clickable(onClick = onSelected)
-      .padding(horizontal = BiliSpacing.Lg),
+      .padding(horizontal = ui.dp(BiliSpacing.Lg)),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = stringResource(option.titleRes),
       color = if (selected) BiliColors.TextPrimary else homeColors.textSecondary,
-      fontSize = BiliTypography.HomeSectionTab,
-      lineHeight = BiliTypography.HomeSectionTabLineHeight,
+      fontSize = ui.sp(BiliTypography.HomeSectionTab),
+      lineHeight = ui.sp(BiliTypography.HomeSectionTabLineHeight),
       fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
       maxLines = 1,
       style = TextStyle(
@@ -572,7 +596,7 @@ private fun SearchTouchSortButton(
 }
 
 @Composable
-private fun SearchKeyboardView(
+internal fun SearchKeyboardView(
   searchText: String,
   suggestions: List<String>,
   searchHistory: List<String>,
@@ -582,28 +606,32 @@ private fun SearchKeyboardView(
   onClearSearchHistory: () -> Unit,
   onSearch: (String) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   Column(
     modifier = Modifier
       .fillMaxSize()
-      .padding(BiliSizing.ContentPadding),
+      .padding(ui.dp(BiliSizing.ContentPadding)),
   ) {
-    Row(
+    AdaptiveTwoPaneLayout(
+      minimumPrimaryWidth = ui.dp(BiliSizing.SearchKeyboardPanelWidth),
+      minimumSecondaryWidth = ui.dp(BiliSizing.VideoCardPreferredMinWidth),
+      preferredPrimaryWidth = ui.dp(BiliSizing.SearchKeyboardPanelWidth),
+      spacing = ui.dp(BiliSpacing.Xl),
       modifier = Modifier.fillMaxSize(),
-      verticalAlignment = Alignment.Top,
     ) {
       Column(
         modifier = Modifier
-          .width(BiliSizing.SearchKeyboardPanelWidth)
-          .fillMaxHeight(),
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.Top,
       ) {
         SearchInputText(searchText = searchText)
-        Spacer(modifier = Modifier.height(BiliSpacing.Md))
+        Spacer(modifier = Modifier.height(ui.dp(BiliSpacing.Md)))
         Row(
-          horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
+          horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
           modifier = Modifier
             .fillMaxWidth()
-            .height(BiliSizing.SearchKeyboardButtonHeight),
+            .heightIn(min = ui.dp(BiliSizing.SearchKeyboardButtonHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget)),
         ) {
           SearchKeyboardButton(
             label = stringResource(R.string.search_action_clear),
@@ -625,20 +653,20 @@ private fun SearchKeyboardView(
             },
           )
         }
-        Spacer(modifier = Modifier.height(BiliSpacing.Md))
+        Spacer(modifier = Modifier.height(ui.dp(BiliSpacing.Md)))
         SearchKeyGrid(
           onKeyClick = { key ->
             onTextChange(searchText + key)
           },
           onMoveLeftToNav = onMoveLeftToNav,
         )
-        Spacer(modifier = Modifier.height(BiliSpacing.Lg))
+        Spacer(modifier = Modifier.height(ui.dp(BiliSpacing.Lg)))
         SearchKeyboardButton(
           label = stringResource(R.string.search_action_search),
           action = true,
           modifier = Modifier
             .fillMaxWidth()
-            .height(BiliSizing.SearchKeyboardButtonHeight),
+            .heightIn(min = ui.dp(BiliSizing.SearchKeyboardButtonHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget)),
           onMoveLeft = onMoveLeftToNav,
           onClick = {
             onSearch(searchText)
@@ -653,7 +681,7 @@ private fun SearchKeyboardView(
           onSearch(suggestion)
         },
         onClearSearchHistory = onClearSearchHistory,
-        modifier = Modifier.weight(1f),
+        modifier = Modifier.fillMaxSize(),
       )
     }
   }
@@ -661,6 +689,7 @@ private fun SearchKeyboardView(
 
 @Composable
 private fun SearchInputText(searchText: String) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   val placeholder = stringResource(R.string.search_input_placeholder)
   val displayText = if (searchText.isBlank()) placeholder else convertChineseText(searchText)
@@ -668,15 +697,15 @@ private fun SearchInputText(searchText: String) {
   Box(
     modifier = Modifier
       .fillMaxWidth()
-      .height(BiliSizing.SearchInputHeight)
-      .background(homeColors.glassSurfaceStrong, RoundedCornerShape(BiliRadius.Card))
-      .padding(horizontal = BiliSpacing.Lg),
+      .heightIn(min = ui.dp(BiliSizing.SearchInputHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
+      .background(homeColors.glassSurfaceStrong, RoundedCornerShape(ui.dp(BiliRadius.Card)))
+      .padding(horizontal = ui.dp(BiliSpacing.Lg)),
     contentAlignment = Alignment.CenterStart,
   ) {
     Text(
       text = displayText,
       color = if (searchText.isBlank()) homeColors.textTertiary else homeColors.textPrimary,
-      fontSize = BiliTypography.SearchInput,
+      fontSize = ui.sp(BiliTypography.SearchInput),
       fontWeight = FontWeight.Bold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
@@ -689,29 +718,23 @@ private fun SearchKeyGrid(
   onKeyClick: (String) -> Unit,
   onMoveLeftToNav: () -> Boolean,
 ) {
-  Column(
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Sm),
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    SearchKeyboardRows.forEach { row ->
-      Row(
-        horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Sm),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
+  val ui = LocalUiMetrics.current
+  BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+  val columns = adaptiveGridColumns(maxWidth.value, ui.dp(BiliSizing.MinimumTouchTarget).coerceAtLeast(BiliSizing.MinimumTouchTarget).value,
+    ui.dp(BiliSpacing.Sm).value, SearchKeyboardRows.first().size)
+  Column(verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Sm)), modifier = Modifier.fillMaxWidth()) {
+    SearchKeyboardRows.flatten().chunked(columns).forEach { row ->
+      Row(horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Sm)), modifier = Modifier.fillMaxWidth()) {
         row.forEachIndexed { columnIndex, key ->
-          SearchKeyboardButton(
-            label = key,
-            modifier = Modifier
-              .weight(1f)
-              .height(BiliSizing.SearchKeyboardButtonHeight),
+          SearchKeyboardButton(label = key,
+            modifier = Modifier.weight(1f).heightIn(min = ui.dp(BiliSizing.SearchKeyboardButtonHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget)),
             onMoveLeft = if (columnIndex == 0) onMoveLeftToNav else null,
-            onClick = {
-              onKeyClick(key)
-            },
-          )
+            onClick = { onKeyClick(key) })
         }
+        repeat(columns - row.size) { Spacer(modifier = Modifier.weight(1f)) }
       }
     }
+  }
   }
 }
 
@@ -723,10 +746,11 @@ private fun SearchKeyboardButton(
   onMoveLeft: (() -> Boolean)? = null,
   onClick: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   BiliFocusableSurface(
     scaleOnFocus = false,
-    shape = RoundedCornerShape(BiliRadius.Card),
+    shape = RoundedCornerShape(ui.dp(BiliRadius.Card)),
     onClick = onClick,
     modifier = modifier
       .onPreviewKeyEvent { event ->
@@ -738,13 +762,14 @@ private fun SearchKeyboardButton(
       },
   ) {
     Box(
-      modifier = Modifier.fillMaxSize(),
+      modifier = Modifier.fillMaxWidth().heightIn(min = ui.dp(BiliSizing.SearchKeyboardButtonHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
+        .padding(vertical = ui.dp(BiliSpacing.Sm)),
       contentAlignment = Alignment.Center,
     ) {
       Text(
         text = label,
         color = if (action) homeColors.accent else homeColors.textSecondary,
-        fontSize = BiliTypography.Body,
+        fontSize = ui.sp(BiliTypography.Body),
         fontWeight = FontWeight.Bold,
       )
     }
@@ -760,11 +785,12 @@ private fun SearchSuggestionPanel(
   onClearSearchHistory: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Box(
     modifier = modifier
       .fillMaxHeight()
-      .padding(start = BiliSpacing.Xl),
+      .padding(vertical = ui.dp(BiliSpacing.Xs)),
   ) {
     if (searchText.isBlank()) {
       if (searchHistory.isEmpty()) {
@@ -781,16 +807,16 @@ private fun SearchSuggestionPanel(
     } else {
       LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = BiliSpacing.Md),
-        verticalArrangement = Arrangement.spacedBy(BiliSpacing.Sm),
+        contentPadding = PaddingValues(vertical = ui.dp(BiliSpacing.Md)),
+        verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Sm)),
       ) {
         item {
           Text(
             text = stringResource(R.string.search_suggestions_title),
             color = homeColors.textSecondary,
-            fontSize = BiliTypography.SectionTitle,
+            fontSize = ui.sp(BiliTypography.SectionTitle),
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = BiliSpacing.Sm),
+            modifier = Modifier.padding(bottom = ui.dp(BiliSpacing.Sm)),
           )
         }
         items(suggestions, key = { suggestion -> suggestion }) { suggestion ->
@@ -813,19 +839,20 @@ private fun SearchHistoryList(
   onHistorySelected: (String) -> Unit,
   onClearSearchHistory: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(vertical = BiliSpacing.Md),
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Sm),
+    contentPadding = PaddingValues(vertical = ui.dp(BiliSpacing.Md)),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Sm)),
   ) {
     item {
       Text(
         text = stringResource(R.string.search_history_title),
         color = homeColors.textSecondary,
-        fontSize = BiliTypography.SectionTitle,
+        fontSize = ui.sp(BiliTypography.SectionTitle),
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(bottom = BiliSpacing.Sm),
+        modifier = Modifier.padding(bottom = ui.dp(BiliSpacing.Sm)),
       )
     }
     items(history, key = { item -> item }) { item ->
@@ -848,6 +875,7 @@ private fun SearchHistoryList(
 
 @Composable
 private fun SearchHintText(text: String) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Box(
     modifier = Modifier.fillMaxSize(),
@@ -856,7 +884,7 @@ private fun SearchHintText(text: String) {
     Text(
       text = text,
       color = homeColors.textTertiary,
-      fontSize = BiliTypography.Body,
+      fontSize = ui.sp(BiliTypography.Body),
       fontWeight = FontWeight.Medium,
     )
   }
@@ -868,25 +896,26 @@ private fun SearchSuggestionItem(
   displayText: String = text,
   onClick: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   BiliFocusableSurface(
     scaleOnFocus = false,
-    shape = RoundedCornerShape(BiliRadius.Card),
+    shape = RoundedCornerShape(ui.dp(BiliRadius.Card)),
     onClick = onClick,
     modifier = Modifier
       .fillMaxWidth()
-      .height(BiliSizing.SearchKeyboardButtonHeight),
+      .heightIn(min = ui.dp(BiliSizing.SearchKeyboardButtonHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget)),
   ) {
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .padding(horizontal = BiliSpacing.Lg),
+        .padding(horizontal = ui.dp(BiliSpacing.Lg)),
       contentAlignment = Alignment.CenterStart,
     ) {
       Text(
         text = displayText,
         color = homeColors.textSecondary,
-        fontSize = BiliTypography.Body,
+        fontSize = ui.sp(BiliTypography.Body),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
@@ -907,6 +936,7 @@ private fun SearchResultsView(
   onBackToKeyboard: () -> Unit,
   onVideoSelected: (VideoSummary) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val sortFocusRequesters = remember {
     SearchSortOptions.associate { option -> option.key to FocusRequester() }
   }
@@ -940,10 +970,10 @@ private fun SearchResultsView(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .padding(top = BiliSpacing.Lg),
+        .padding(top = ui.dp(BiliSpacing.Lg)),
     ) {
       when (val currentState = viewState.resultState) {
-        SearchResultState.Loading -> VideoGridSkeleton()
+        SearchResultState.Loading -> VideoGridSkeleton(horizontalPadding = ui.dp(BiliSizing.SearchVideoGridHorizontalPadding))
         SearchResultState.Empty -> FeedStatusScreen(message = stringResource(R.string.search_empty))
         is SearchResultState.Failed -> FeedStatusScreen(
           message = stringResource(R.string.search_failed_with_message, currentState.message),
@@ -989,26 +1019,27 @@ private fun SearchResultsHeader(
   onMoveLeftToNav: () -> Boolean,
   onOrderSelected: (String) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Column(
     modifier = Modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
   ) {
     Text(
       text = stringResource(R.string.search_results_title, convertChineseText(query)),
       color = homeColors.textPrimary,
-      fontSize = BiliTypography.SectionTitle,
+      fontSize = ui.sp(BiliTypography.SectionTitle),
       fontWeight = FontWeight.Bold,
-      modifier = Modifier.padding(horizontal = BiliSizing.SearchVideoGridHorizontalPadding),
+      modifier = Modifier.padding(horizontal = ui.dp(BiliSizing.SearchVideoGridHorizontalPadding)),
     )
     LazyRow(
       modifier = Modifier
-        .padding(horizontal = BiliSizing.SearchVideoGridHorizontalPadding)
+        .padding(horizontal = ui.dp(BiliSizing.SearchVideoGridHorizontalPadding))
         .fillMaxWidth()
-        .height(BiliSizing.HomeSectionTabHeight + BiliSpacing.Xs)
-        .padding(BiliSpacing.Xs),
-      horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Lg),
-      contentPadding = PaddingValues(horizontal = BiliSpacing.Xs),
+        .heightIn(min = ui.dp(BiliSizing.HomeSectionTabHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget) + ui.dp(BiliSpacing.Xs))
+        .padding(ui.dp(BiliSpacing.Xs)),
+      horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Lg)),
+      contentPadding = PaddingValues(horizontal = ui.dp(BiliSpacing.Xs)),
     ) {
       itemsIndexed(SearchSortOptions, key = { _, option -> option.key }) { index, option ->
         val selected = selectedOrderKey == option.key
@@ -1040,10 +1071,11 @@ private fun SearchSortButton(
   onMoveDownToResults: () -> Boolean,
   onSelected: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   var focused by remember { mutableStateOf(false) }
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
-  val shape = RoundedCornerShape(BiliRadius.Pill)
+  val shape = RoundedCornerShape(ui.dp(BiliRadius.Pill))
   val targetBorderColor = if (focused) homeColors.accent else BiliColors.Transparent
   val targetTextColor = when {
     selected -> homeColors.accent
@@ -1052,12 +1084,12 @@ private fun SearchSortButton(
   }
   val borderWidth = if (performancePolicy.motionEnabled) {
     animateDpAsState(
-      targetValue = if (focused) BiliFocus.BorderWidth else BiliFocus.RestingBorderWidth,
+      targetValue = if (focused) ui.dp(BiliFocus.BorderWidth) else ui.dp(BiliFocus.RestingBorderWidth),
       animationSpec = androidx.compose.animation.core.tween(BiliMotion.FocusMs, easing = BiliMotion.FocusEasing),
       label = "searchSortBorderWidth",
     ).value
   } else {
-    if (focused) BiliFocus.BorderWidth else BiliFocus.RestingBorderWidth
+    if (focused) ui.dp(BiliFocus.BorderWidth) else ui.dp(BiliFocus.RestingBorderWidth)
   }
   val borderColor = if (performancePolicy.motionEnabled) {
     animateColorAsState(
@@ -1081,8 +1113,8 @@ private fun SearchSortButton(
 
   Box(
     modifier = modifier
-      .height(BiliSizing.HomeSectionTabHeight)
-      .widthIn(min = BiliSizing.HomeSectionTabCompactMinWidth)
+      .heightIn(min = ui.dp(BiliSizing.HomeSectionTabHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
+      .widthIn(min = ui.dp(BiliSizing.HomeSectionTabCompactMinWidth))
       .clip(shape)
       .border(BorderStroke(borderWidth, borderColor), shape)
       .onFocusChanged { focusState ->
@@ -1109,14 +1141,14 @@ private fun SearchSortButton(
         indication = null,
         onClick = onSelected,
       )
-      .padding(horizontal = BiliSpacing.Sm),
+      .padding(horizontal = ui.dp(BiliSpacing.Sm)),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = stringResource(option.titleRes),
       color = textColor,
-      fontSize = BiliTypography.HomeSectionTab,
-      lineHeight = BiliTypography.HomeSectionTabLineHeight,
+      fontSize = ui.sp(BiliTypography.HomeSectionTab),
+      lineHeight = ui.sp(BiliTypography.HomeSectionTabLineHeight),
       fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium,
       textAlign = TextAlign.Center,
       maxLines = 1,
@@ -1144,6 +1176,7 @@ private fun SearchResultGrid(
   onBackToKeyboard: () -> Unit,
   onVideoSelected: (VideoSummary) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   LaunchedEffect(videos, focusFirstResult) {
     if (videos.isNotEmpty() && focusFirstResult) {
       withFrameNanos { }
@@ -1174,7 +1207,7 @@ private fun SearchResultGrid(
       true
     },
     onVideoSelected = onVideoSelected,
-    horizontalPadding = BiliSizing.SearchVideoGridHorizontalPadding,
+    horizontalPadding = ui.dp(BiliSizing.SearchVideoGridHorizontalPadding),
   )
 }
 

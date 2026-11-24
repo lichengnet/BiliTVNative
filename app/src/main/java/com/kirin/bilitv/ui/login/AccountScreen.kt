@@ -1,10 +1,19 @@
 package com.kirin.bilitv.ui.login
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -68,21 +78,27 @@ fun AccountScreen(
 private fun LoggedInAccount(
   userSession: UserSession,
 ) {
+  val ui = LocalUiMetrics.current
+  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+  val viewportHeight = maxHeight
   Column(
-    modifier = Modifier.fillMaxSize(),
+    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = viewportHeight),
     verticalArrangement = Arrangement.Center,
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     AccountProfileCard(
       userSession = userSession,
       modifier = Modifier
-        .size(width = BiliSizing.AccountProfilePanelWidth, height = BiliSizing.AccountProfilePanelHeight),
+        .widthIn(max = ui.dp(BiliSizing.AccountProfilePanelWidth)).fillMaxWidth()
+        .heightIn(min = ui.dp(BiliSizing.AccountProfilePanelHeight)),
     )
+  }
   }
 }
 
 @Composable
 private fun TvQrLoginPanel(authRepository: AuthRepository) {
+  val ui = LocalUiMetrics.current
   val coroutineScope = rememberCoroutineScope()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   var state by remember { mutableStateOf<QrLoginState>(QrLoginState.Loading) }
@@ -133,47 +149,52 @@ private fun TvQrLoginPanel(authRepository: AuthRepository) {
     }
   }
 
+  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+  val viewportHeight = maxHeight
   Column(
-    modifier = Modifier.fillMaxSize(),
+    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = viewportHeight),
     verticalArrangement = Arrangement.Center,
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
     Text(
       text = stringResource(R.string.login_tv_title),
       color = BiliColors.TextPrimary,
-      fontSize = BiliTypography.ScreenTitle,
+      fontSize = ui.sp(BiliTypography.ScreenTitle),
       fontWeight = FontWeight.Bold,
     )
-    Spacer(modifier = Modifier.height(BiliSpacing.Xl))
+    Spacer(modifier = Modifier.height(ui.dp(BiliSpacing.Xl)))
     QrContent(state = state)
-    Spacer(modifier = Modifier.height(BiliSpacing.Lg))
+    Spacer(modifier = Modifier.height(ui.dp(BiliSpacing.Lg)))
     LoginStatusText(state = state)
     if (state is QrLoginState.Error || state is QrLoginState.Expired) {
-      Spacer(modifier = Modifier.height(BiliSpacing.Xl))
+      Spacer(modifier = Modifier.height(ui.dp(BiliSpacing.Xl)))
       BiliFocusableSurface(
         scaleOnFocus = false,
-        shape = RoundedCornerShape(BiliRadius.Pill),
+        shape = RoundedCornerShape(ui.dp(BiliRadius.Pill)),
         onClick = ::generateQrCode,
       ) {
         Text(
           text = stringResource(R.string.login_qr_refresh),
           color = BiliColors.TextPrimary,
-          fontSize = BiliTypography.Body,
+          fontSize = ui.sp(BiliTypography.Body),
           fontWeight = FontWeight.Bold,
-          modifier = Modifier.padding(horizontal = BiliSpacing.Xl, vertical = BiliSpacing.Md),
+          modifier = Modifier.padding(horizontal = ui.dp(BiliSpacing.Xl), vertical = ui.dp(BiliSpacing.Md)),
         )
       }
     }
   }
+  }
 }
 
 @Composable
-private fun QrContent(state: QrLoginState) {
+internal fun QrContent(state: QrLoginState) {
+  val ui = LocalUiMetrics.current
   Box(
     modifier = Modifier
-      .size(BiliSizing.LoginQrContainerSize)
-      .background(BiliColors.TextPrimary, RoundedCornerShape(BiliRadius.Panel))
-      .padding(BiliSpacing.Lg),
+      .testTag("login_qr_container")
+      .widthIn(max = ui.dp(BiliSizing.LoginQrContainerSize)).fillMaxWidth().aspectRatio(1f)
+      .background(BiliColors.TextPrimary, RoundedCornerShape(ui.dp(BiliRadius.Panel)))
+      .padding(ui.dp(BiliSpacing.Lg)),
     contentAlignment = Alignment.Center,
   ) {
     val bitmap = (state as? QrLoginState.Waiting)?.qrBitmap
@@ -181,7 +202,7 @@ private fun QrContent(state: QrLoginState) {
       Image(
         bitmap = bitmap.asImageBitmap(),
         contentDescription = stringResource(R.string.login_qr_content_description),
-        modifier = Modifier.size(BiliSizing.LoginQrImageSize),
+        modifier = Modifier.size(ui.dp(BiliSizing.LoginQrImageSize)),
       )
     } else {
       Text(
@@ -191,7 +212,7 @@ private fun QrContent(state: QrLoginState) {
           stringResource(R.string.login_qr_unavailable)
         },
         color = BiliColors.Background,
-        fontSize = BiliTypography.Body,
+        fontSize = ui.sp(BiliTypography.Body),
         fontWeight = FontWeight.Bold,
       )
     }
@@ -200,6 +221,7 @@ private fun QrContent(state: QrLoginState) {
 
 @Composable
 private fun LoginStatusText(state: QrLoginState) {
+  val ui = LocalUiMetrics.current
   val text = when (state) {
     QrLoginState.Loading -> stringResource(R.string.login_status_loading)
     is QrLoginState.Waiting -> if (state.scanned) {
@@ -226,12 +248,12 @@ private fun LoginStatusText(state: QrLoginState) {
   Text(
     text = text,
     color = color,
-    fontSize = BiliTypography.Body,
+    fontSize = ui.sp(BiliTypography.Body),
     fontWeight = FontWeight.Medium,
   )
 }
 
-private sealed interface QrLoginState {
+internal sealed interface QrLoginState {
   data object Loading : QrLoginState
   data class Waiting(
     val authCode: String,

@@ -1,5 +1,8 @@
 package com.kirin.bilitv.ui.home
 
+import com.kirin.bilitv.ui.theme.UiMetrics
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -15,14 +18,17 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,12 +49,15 @@ import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import coil.compose.AsyncImage
 import com.kirin.bilitv.R
+import com.kirin.bilitv.core.device.CompatibilityDiagnostics
+import com.kirin.bilitv.core.image.imageFailureDiagnosticCode
 import com.kirin.bilitv.core.image.buildOwnerAvatarRequest
 import com.kirin.bilitv.core.image.buildVideoThumbnailRequest
 import com.kirin.bilitv.core.model.VideoCardRelativeText
@@ -68,8 +77,6 @@ import com.kirin.bilitv.ui.theme.BiliFocus
 import com.kirin.bilitv.ui.theme.BiliMotion
 import com.kirin.bilitv.ui.theme.BiliRadius
 import com.kirin.bilitv.ui.theme.BiliSizing
-import com.kirin.bilitv.ui.theme.BiliSpacing
-import com.kirin.bilitv.ui.theme.BiliTypography
 import com.kirin.bilitv.ui.theme.LocalHomeColors
 import com.kirin.bilitv.ui.transition.playbackSharedBounds
 import com.kirin.bilitv.ui.transition.playbackSharedTransitionKey
@@ -89,7 +96,25 @@ fun VideoCard(
   interactionPaused: Boolean = false,
   onClick: () -> Unit = {},
   onFocused: () -> Unit = {},
+  contentScale: Float = LocalUiMetrics.current.scale,
 ) {
+  val metrics = remember(contentScale) { VideoCardMetrics(contentScale) }
+  CompositionLocalProvider(LocalVideoCardMetrics provides metrics) {
+    VideoCardContent(video, modifier, mode, interactionPaused, onClick, onFocused)
+  }
+}
+
+@Composable
+private fun VideoCardContent(
+  video: VideoSummary,
+  modifier: Modifier,
+  mode: VideoCardMode,
+  interactionPaused: Boolean,
+  onClick: () -> Unit,
+  onFocused: () -> Unit,
+) {
+  val ui = LocalUiMetrics.current
+  val metrics = LocalVideoCardMetrics.current
   var focused by remember { mutableStateOf(false) }
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
@@ -121,10 +146,11 @@ fun VideoCard(
 
   BiliFocusableSurface(
     modifier = modifier
+      .testTag("video_card_${video.bvid}")
       .fillMaxWidth()
       .then(
         if (liquidGlassActive) {
-          Modifier.padding(BiliFocus.LiquidGlassCardFocusPadding)
+          Modifier.padding(ui.dp(BiliFocus.LiquidGlassCardFocusPadding))
         } else {
           Modifier
         },
@@ -152,24 +178,24 @@ fun VideoCard(
     },
     focusedBorderWidth = if (cinematicEffectsEnabled) {
       if (liquidGlassActive) {
-        BiliFocus.LiquidGlassCardBorderWidth
+        ui.dp(BiliFocus.LiquidGlassCardBorderWidth)
       } else {
-        BiliFocus.RestingBorderWidth
+        ui.dp(BiliFocus.RestingBorderWidth)
       }
     } else {
-      BiliFocus.BorderWidth
+      ui.dp(BiliFocus.BorderWidth)
     },
     restingBorderWidth = if (liquidGlassActive) {
-      BiliFocus.LiquidGlassCardBorderWidth
+      ui.dp(BiliFocus.LiquidGlassCardBorderWidth)
     } else if (cinematicEffectsEnabled) {
-      BiliFocus.LiquidGlassCardBorderWidth
+      ui.dp(BiliFocus.LiquidGlassCardBorderWidth)
     } else {
-      BiliFocus.RestingBorderWidth
+      ui.dp(BiliFocus.RestingBorderWidth)
     },
     focusedLift = if (cinematicEffectsEnabled) {
-      BiliFocus.CinematicCardLift
+      ui.dp(BiliFocus.CinematicCardLift)
     } else {
-      BiliFocus.RestingLift
+      ui.dp(BiliFocus.RestingLift)
     },
     restingBackgroundColor = if (cinematicEffectsEnabled) {
       cardSurface
@@ -186,10 +212,10 @@ fun VideoCard(
     onFocusChanged = { focused = it },
     focusedForeground = when {
       cinematicEffectsEnabled && liquidGlassActive -> {
-        { drawLiquidGlassCardFocusedOutline() }
+        { drawLiquidGlassCardFocusedOutline(ui) }
       }
       cinematicEffectsEnabled -> {
-        { drawCinematicCardGlassBorder() }
+        { drawCinematicCardGlassBorder(ui) }
       }
       else -> null
     },
@@ -205,15 +231,16 @@ fun VideoCard(
         )
         Column(
           modifier = Modifier
-            .height(BiliSizing.VideoTextHeight)
+            .testTag("video_info_${video.bvid}")
+            .heightIn(min = metrics.textHeight)
             .background(cardInfoBackground)
-            .padding(horizontal = BiliSpacing.Sm, vertical = BiliSpacing.Xs),
+            .padding(horizontal = metrics.smallSpacing, vertical = metrics.extraSmallSpacing),
         ) {
           Text(
             text = title,
             color = titleColor,
-            fontSize = BiliTypography.CardTitle,
-            lineHeight = BiliTypography.CardTitleLineHeight,
+            fontSize = metrics.titleFontSize,
+            lineHeight = metrics.titleLineHeight,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = if (focused) TextOverflow.Clip else TextOverflow.Ellipsis,
@@ -225,7 +252,7 @@ fun VideoCard(
                     iterations = Int.MAX_VALUE,
                     repeatDelayMillis = BiliMotion.TitleMarqueeRepeatDelayMs,
                     initialDelayMillis = BiliMotion.TitleMarqueeInitialDelayMs,
-                    velocity = BiliSizing.TitleMarqueeVelocity,
+                    velocity = metrics.marqueeVelocity,
                   )
                 } else {
                   Modifier
@@ -251,9 +278,9 @@ fun VideoCard(
   }
 }
 
-private fun DrawScope.drawCinematicCardGlassBorder() {
-  val radius = BiliRadius.Card.toPx()
-  val outerWidth = BiliFocus.CinematicCardGlassOuterWidth.toPx()
+private fun DrawScope.drawCinematicCardGlassBorder(ui: UiMetrics) {
+  val radius = ui.dp(BiliRadius.Card).toPx()
+  val outerWidth = ui.dp(BiliFocus.CinematicCardGlassOuterWidth).toPx()
   val outerInset = outerWidth / 2f
   drawRoundRect(
     brush = Brush.linearGradient(
@@ -275,8 +302,8 @@ private fun DrawScope.drawCinematicCardGlassBorder() {
     style = Stroke(width = outerWidth),
   )
 
-  val innerWidth = BiliFocus.CinematicCardGlassInnerWidth.toPx()
-  val innerInset = BiliFocus.CinematicCardGlassInnerInset.toPx() + innerWidth / 2f
+  val innerWidth = ui.dp(BiliFocus.CinematicCardGlassInnerWidth).toPx()
+  val innerInset = ui.dp(BiliFocus.CinematicCardGlassInnerInset).toPx() + innerWidth / 2f
   val innerRadius = (radius - innerInset).coerceAtLeast(0f)
   drawRoundRect(
     brush = Brush.linearGradient(
@@ -299,11 +326,11 @@ private fun DrawScope.drawCinematicCardGlassBorder() {
   )
 }
 
-private fun DrawScope.drawLiquidGlassCardFocusedOutline() {
-  val outlineOutset = BiliFocus.LiquidGlassCardFocusPadding.toPx()
+private fun DrawScope.drawLiquidGlassCardFocusedOutline(ui: UiMetrics) {
+  val outlineOutset = ui.dp(BiliFocus.LiquidGlassCardFocusPadding).toPx()
   val bandWidth = outlineOutset
   val bandInset = bandWidth / 2f
-  val radius = BiliRadius.Card.toPx() + bandInset
+  val radius = ui.dp(BiliRadius.Card).toPx() + bandInset
   val borderBrush = Brush.linearGradient(
     colors = listOf(
       BiliColors.TextPrimary.copy(alpha = BiliFocus.LiquidGlassCardFocusedOuterAlpha),
@@ -333,6 +360,7 @@ private fun MetadataRow(
   focused: Boolean,
   focusEffectsEnabled: Boolean,
 ) {
+  val metrics = LocalVideoCardMetrics.current
   val homeColors = LocalHomeColors.current
   val ownerName = convertChineseText(video.ownerName)
   val relativeText = rememberVideoCardRelativeText()
@@ -366,12 +394,12 @@ private fun MetadataRow(
   ) {
     if (video.ownerName.isNotBlank()) {
       OwnerAvatar(video)
-      Spacer(modifier = Modifier.width(BiliSpacing.Sm))
+      Spacer(modifier = Modifier.width(metrics.smallSpacing))
       Text(
         text = ownerName,
         color = ownerColor,
-        fontSize = BiliTypography.CardMeta,
-        lineHeight = BiliTypography.CardMetaLineHeight,
+        fontSize = metrics.metaFontSize,
+        lineHeight = metrics.metaLineHeight,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.weight(1f),
@@ -381,12 +409,12 @@ private fun MetadataRow(
     }
 
     if (trailingText.isNotBlank()) {
-      Spacer(modifier = Modifier.width(BiliSpacing.Sm))
+      Spacer(modifier = Modifier.width(metrics.smallSpacing))
       Text(
         text = trailingText,
         color = trailingColor,
-        fontSize = BiliTypography.CardMeta,
-        lineHeight = BiliTypography.CardMetaLineHeight,
+        fontSize = metrics.metaFontSize,
+        lineHeight = metrics.metaLineHeight,
         maxLines = 1,
       )
     }
@@ -395,11 +423,13 @@ private fun MetadataRow(
 
 @Composable
 private fun OwnerAvatar(video: VideoSummary) {
+  val metrics = LocalVideoCardMetrics.current
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
   val fallbackPainter = ColorPainter(homeColors.glassSurfaceStrong)
   val modifier = Modifier
-    .size(BiliSizing.OwnerAvatarSize)
+    .testTag("video_avatar_${video.bvid}")
+    .size(metrics.avatarSize)
     .clip(CircleShape)
     .background(homeColors.glassSurfaceStrong)
 
@@ -500,7 +530,13 @@ private fun VideoCover(
   focusEffectsEnabled: Boolean,
   interactionPaused: Boolean,
 ) {
+  val ui = LocalUiMetrics.current
+  val metrics = LocalVideoCardMetrics.current
   val context = LocalContext.current
+  val inheritedLineHeight = LocalTextStyle.current.lineHeight
+  val failureLineHeight = if (inheritedLineHeight.isSp) {
+    metrics.scaledInheritedLineHeight(inheritedLineHeight) / ui.scale
+  } else inheritedLineHeight
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
   val request = remember(
@@ -525,6 +561,8 @@ private fun VideoCover(
   val cinematicEffectsEnabled = performancePolicy.cinematicVisualEffectsEnabled
   val coverBackground = homeColors.glassSurfaceStrong
   val fallbackPainter = ColorPainter(coverBackground)
+  var imageFailed by remember(request) { mutableStateOf(false) }
+  var failureCode by remember(request) { mutableStateOf<String?>(null) }
   var blurFocused by remember { mutableStateOf(false) }
   LaunchedEffect(
     focused,
@@ -574,16 +612,23 @@ private fun VideoCover(
     modifier = Modifier
       .fillMaxWidth()
       .aspectRatio(BiliSizing.VideoThumbnailAspectRatio)
+      .testTag("video_cover_${video.bvid}")
       .playbackSharedBounds(
         key = sharedKey,
         enabled = performancePolicy.motionEnabled,
       )
-      .clip(RoundedCornerShape(BiliRadius.Card))
+      .clip(RoundedCornerShape(ui.dp(BiliRadius.Card)))
       .background(coverBackground),
   ) {
     AsyncImage(
       model = request,
       contentDescription = title,
+      onLoading = { imageFailed = false; failureCode = null },
+      onSuccess = { imageFailed = false; failureCode = null },
+      onError = { state ->
+        imageFailed = true
+        failureCode = if (CompatibilityDiagnostics.enabled) imageFailureDiagnosticCode(state.result.throwable) else null
+      },
       contentScale = ContentScale.Crop,
       placeholder = fallbackPainter,
       error = fallbackPainter,
@@ -599,7 +644,7 @@ private fun VideoCover(
         error = fallbackPainter,
         modifier = Modifier
           .fillMaxSize()
-          .blur(BiliFocus.FocusedCoverBlurRadius)
+          .blur(ui.dp(BiliFocus.FocusedCoverBlurRadius))
           .graphicsLayer { alpha = blurAlpha },
       )
     }
@@ -623,7 +668,7 @@ private fun VideoCover(
         text = badge,
         modifier = Modifier
           .align(Alignment.TopEnd)
-          .padding(BiliSpacing.Xs),
+          .padding(metrics.extraSmallSpacing),
       )
     }
 
@@ -635,13 +680,40 @@ private fun VideoCover(
         video = video,
         modifier = Modifier
           .align(Alignment.BottomCenter)
-          .padding(horizontal = BiliSpacing.Sm, vertical = BiliSpacing.Sm),
+          .padding(horizontal = metrics.smallSpacing, vertical = metrics.smallSpacing),
       )
       VideoCardMode.History -> HistoryCoverMetadata(
         video = video,
         modifier = Modifier.align(Alignment.BottomCenter),
       )
     }
+
+    // Failure text must stay above the opaque blur placeholder and cover metadata.
+    if (imageFailed) {
+      Box(modifier = Modifier.fillMaxSize().background(coverBackground).padding(metrics.smallSpacing).testTag("video_failure_${video.bvid}"), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+          Text(
+            text = stringResource(R.string.video_thumbnail_load_failed),
+            color = homeColors.textPrimary,
+            fontSize = metrics.failureFontSize,
+            lineHeight = failureLineHeight,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          failureCode?.let { code ->
+            Text(
+              text = stringResource(R.string.video_thumbnail_diagnostic_code, code),
+              color = homeColors.textPrimary,
+              fontSize = metrics.metaFontSize,
+              lineHeight = failureLineHeight,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+      }
+    }
+
   }
 }
 
@@ -667,20 +739,22 @@ private fun CinematicCoverPolish(
 
 @Composable
 private fun VideoBadge(text: String, modifier: Modifier = Modifier) {
+  val ui = LocalUiMetrics.current
+  val metrics = LocalVideoCardMetrics.current
   val homeColors = LocalHomeColors.current
   Box(
     modifier = modifier
-      .height(BiliSizing.VideoBadgeMinHeight)
-      .clip(RoundedCornerShape(BiliRadius.Card))
+      .heightIn(min = metrics.badgeHeight)
+      .clip(RoundedCornerShape(ui.dp(BiliRadius.Card)))
       .background(homeColors.accent)
-      .padding(horizontal = BiliSpacing.Sm),
+      .padding(horizontal = metrics.smallSpacing),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = text,
       color = BiliColors.TextPrimary,
-      fontSize = BiliTypography.CardBadge,
-      lineHeight = BiliTypography.CardBadgeLineHeight,
+      fontSize = metrics.badgeFontSize,
+      lineHeight = metrics.badgeLineHeight,
       fontWeight = FontWeight.Bold,
       maxLines = 1,
     )
@@ -689,10 +763,11 @@ private fun VideoBadge(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun BottomScrim(modifier: Modifier = Modifier) {
+  val metrics = LocalVideoCardMetrics.current
   Box(
     modifier = modifier
       .fillMaxWidth()
-      .height(BiliSizing.VideoCoverGradientHeight)
+      .height(metrics.scrimHeight)
       .background(
         Brush.verticalGradient(
           colors = listOf(
@@ -706,6 +781,7 @@ private fun BottomScrim(modifier: Modifier = Modifier) {
 
 @Composable
 private fun StandardCoverMetadata(video: VideoSummary, modifier: Modifier = Modifier) {
+  val metrics = LocalVideoCardMetrics.current
   val homeColors = LocalHomeColors.current
   Row(
     modifier = modifier.fillMaxWidth(),
@@ -721,7 +797,7 @@ private fun StandardCoverMetadata(video: VideoSummary, modifier: Modifier = Modi
         text = video.view.formatCompactCountText(),
       )
       if (video.danmaku > 0) {
-        Spacer(modifier = Modifier.width(BiliSpacing.Sm))
+        Spacer(modifier = Modifier.width(metrics.smallSpacing))
         VideoMetric(
           iconRes = R.drawable.ic_video_danmaku_count,
           contentDescription = stringResource(R.string.video_danmaku_count_content_description),
@@ -732,8 +808,8 @@ private fun StandardCoverMetadata(video: VideoSummary, modifier: Modifier = Modi
     Text(
       text = video.durationText(),
       color = homeColors.textPrimary,
-      fontSize = BiliTypography.CardOverlay,
-      lineHeight = BiliTypography.CardOverlayLineHeight,
+      fontSize = metrics.overlayFontSize,
+      lineHeight = metrics.overlayLineHeight,
       fontWeight = FontWeight.Bold,
       maxLines = 1,
     )
@@ -746,6 +822,7 @@ private fun VideoMetric(
   contentDescription: String,
   text: String,
 ) {
+  val metrics = LocalVideoCardMetrics.current
   val homeColors = LocalHomeColors.current
   Row(
     verticalAlignment = Alignment.CenterVertically,
@@ -754,14 +831,14 @@ private fun VideoMetric(
       painter = painterResource(iconRes),
       contentDescription = contentDescription,
       tint = homeColors.textSecondary,
-      modifier = Modifier.size(BiliSizing.VideoOverlayIconSize),
+      modifier = Modifier.size(metrics.overlayIconSize),
     )
-    Spacer(modifier = Modifier.width(BiliSpacing.Xs))
+    Spacer(modifier = Modifier.width(metrics.extraSmallSpacing))
     Text(
       text = text,
       color = homeColors.textSecondary,
-      fontSize = BiliTypography.CardOverlay,
-      lineHeight = BiliTypography.CardOverlayLineHeight,
+      fontSize = metrics.overlayFontSize,
+      lineHeight = metrics.overlayLineHeight,
       maxLines = 1,
     )
   }
@@ -769,6 +846,7 @@ private fun VideoMetric(
 
 @Composable
 private fun HistoryCoverMetadata(video: VideoSummary, modifier: Modifier = Modifier) {
+  val metrics = LocalVideoCardMetrics.current
   val homeColors = LocalHomeColors.current
   val completedText = stringResource(R.string.video_watch_completed)
   Column(
@@ -777,7 +855,7 @@ private fun HistoryCoverMetadata(video: VideoSummary, modifier: Modifier = Modif
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(horizontal = BiliSpacing.Sm),
+        .padding(horizontal = metrics.smallSpacing),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       val pageText = if (video.historyVideos > 1 && video.historyPage > 0) {
@@ -802,19 +880,20 @@ private fun HistoryCoverMetadata(video: VideoSummary, modifier: Modifier = Modif
           Text(
             text = video.watchProgressText(completedText),
             color = homeColors.textPrimary,
-            fontSize = BiliTypography.CardOverlay,
-            lineHeight = BiliTypography.CardOverlayLineHeight,
+            fontSize = metrics.overlayFontSize,
+            lineHeight = metrics.overlayLineHeight,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
           )
         }
       }
     }
-    Spacer(modifier = Modifier.height(BiliSpacing.Xs))
+    Spacer(modifier = Modifier.height(metrics.extraSmallSpacing))
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .height(BiliSizing.VideoProgressBarHeight)
+        .testTag("video_progress_${video.bvid}")
+        .height(metrics.progressBarHeight)
         .background(BiliColors.ProgressTrack),
     ) {
       Box(
@@ -829,20 +908,22 @@ private fun HistoryCoverMetadata(video: VideoSummary, modifier: Modifier = Modif
 
 @Composable
 private fun HistoryOverlayBadge(text: String, modifier: Modifier = Modifier) {
+  val ui = LocalUiMetrics.current
+  val metrics = LocalVideoCardMetrics.current
   val homeColors = LocalHomeColors.current
   Box(
     modifier = modifier
-      .height(BiliSizing.VideoBadgeMinHeight)
-      .clip(RoundedCornerShape(BiliRadius.Card))
+      .heightIn(min = metrics.badgeHeight)
+      .clip(RoundedCornerShape(ui.dp(BiliRadius.Card)))
       .background(homeColors.accent)
-      .padding(horizontal = BiliSpacing.Sm),
+      .padding(horizontal = metrics.smallSpacing),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = text,
       color = BiliColors.TextPrimary,
-      fontSize = BiliTypography.CardBadge,
-      lineHeight = BiliTypography.CardBadgeLineHeight,
+      fontSize = metrics.badgeFontSize,
+      lineHeight = metrics.badgeLineHeight,
       fontWeight = FontWeight.Bold,
       maxLines = 1,
     )

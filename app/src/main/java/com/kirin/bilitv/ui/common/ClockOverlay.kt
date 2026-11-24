@@ -1,5 +1,7 @@
 package com.kirin.bilitv.ui.common
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -15,10 +17,11 @@ fun ClockOverlay(
   clockText: String,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   Text(
     text = clockText,
     color = BiliColors.TextPrimary,
-    fontSize = BiliTypography.PlayerMeta,
+    fontSize = ui.sp(BiliTypography.PlayerMeta),
     fontWeight = FontWeight.Bold,
     modifier = modifier,
   )

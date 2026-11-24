@@ -1,5 +1,8 @@
 package com.kirin.bilitv.ui.focus
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+import com.kirin.bilitv.ui.theme.uiDp
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -9,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,6 +38,7 @@ import com.kirin.bilitv.ui.glass.biliLiquidGlassSurface
 import com.kirin.bilitv.ui.input.InteractionMode
 import com.kirin.bilitv.ui.input.LocalInteractionMode
 import com.kirin.bilitv.ui.settings.LocalBiliPerformancePolicy
+import com.kirin.bilitv.ui.theme.BiliSizing
 import com.kirin.bilitv.ui.theme.BiliFocus
 import com.kirin.bilitv.ui.theme.BiliMotion
 import com.kirin.bilitv.ui.theme.BiliRadius
@@ -44,15 +49,15 @@ fun BiliFocusableSurface(
   modifier: Modifier = Modifier,
   scaleOnFocus: Boolean = true,
   shadowOnFocus: Boolean = true,
-  shape: Shape = RoundedCornerShape(BiliRadius.Card),
+  shape: Shape = RoundedCornerShape(uiDp(BiliRadius.Card)),
   focusedScale: Float = BiliFocus.CardScale,
   focusedBorderColor: Color? = null,
   restingBorderColor: Color? = null,
-  focusedBorderWidth: Dp = BiliFocus.BorderWidth,
-  restingBorderWidth: Dp = BiliFocus.RestingBorderWidth,
+  focusedBorderWidth: Dp = uiDp(BiliFocus.BorderWidth),
+  restingBorderWidth: Dp = uiDp(BiliFocus.RestingBorderWidth),
   focusedShadowColor: Color? = null,
-  focusedShadowElevation: Dp = BiliFocus.ShadowElevation,
-  focusedLift: Dp = BiliFocus.RestingLift,
+  focusedShadowElevation: Dp = uiDp(BiliFocus.ShadowElevation),
+  focusedLift: Dp = uiDp(BiliFocus.RestingLift),
   focusedBackgroundColor: Color? = null,
   restingBackgroundColor: Color? = null,
   focusedForeground: (DrawScope.() -> Unit)? = null,
@@ -61,6 +66,7 @@ fun BiliFocusableSurface(
   onFocusChanged: (Boolean) -> Unit = {},
   content: @Composable () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   var focused by remember { mutableStateOf(false) }
   val performancePolicy = LocalBiliPerformancePolicy.current
   val interactionMode = LocalInteractionMode.current
@@ -103,26 +109,26 @@ fun BiliFocusableSurface(
       targetValue = if (visuallyFocused && focusShadowEnabled) {
         focusedShadowElevation
       } else {
-        BiliFocus.RestingShadowElevation
+        ui.dp(BiliFocus.RestingShadowElevation)
       },
       animationSpec = tween(BiliMotion.FocusMs, easing = BiliMotion.FocusEasing),
       label = "focusShadowElevation",
     ).value
   } else {
-    BiliFocus.RestingShadowElevation
+    ui.dp(BiliFocus.RestingShadowElevation)
   }
   val lift = if (performancePolicy.motionEnabled) {
     animateDpAsState(
       targetValue = if (visuallyFocused && scaleOnFocus) {
         focusedLift
       } else {
-        BiliFocus.RestingLift
+        ui.dp(BiliFocus.RestingLift)
       },
       animationSpec = tween(BiliMotion.FocusMs, easing = BiliMotion.FocusEasing),
       label = "focusLift",
     ).value
   } else {
-    BiliFocus.RestingLift
+    ui.dp(BiliFocus.RestingLift)
   }
   val borderColor = if (performancePolicy.motionEnabled) {
     animateColorAsState(
@@ -150,7 +156,8 @@ fun BiliFocusableSurface(
   val shadowColor = focusedShadowColor ?: homeColors.accent.copy(alpha = BiliFocus.ShadowAlpha)
 
   Box(
-    modifier = modifier
+    modifier = (if (ui.active) Modifier.sizeIn(minWidth = BiliSizing.MinimumTouchTarget, minHeight = BiliSizing.MinimumTouchTarget) else Modifier)
+      .then(modifier)
       .zIndex(if (visuallyFocused) BiliFocus.FocusedZIndex else 0f)
       .graphicsLayer {
         scaleX = scale

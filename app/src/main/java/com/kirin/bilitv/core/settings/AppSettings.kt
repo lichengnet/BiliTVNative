@@ -31,6 +31,7 @@ enum class HomeThemeVariant(val key: String) {
 }
 
 data class AppSettings(
+  val uiSize: AppUiSize = AppUiSize.Medium,
   val visualPerformanceMode: AppVisualPerformanceMode = AppVisualPerformanceMode.Balanced,
   val homeThemeVariant: HomeThemeVariant = HomeThemeVariant.Pink,
   val chineseTextVariant: ChineseTextVariant = ChineseTextVariant.Simplified,

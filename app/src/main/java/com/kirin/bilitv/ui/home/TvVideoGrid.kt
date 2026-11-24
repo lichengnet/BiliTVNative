@@ -1,9 +1,13 @@
 package com.kirin.bilitv.ui.home
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+import com.kirin.bilitv.ui.theme.uiDp
+
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.focusGroup
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,12 +27,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -116,13 +122,18 @@ internal fun TvVideoGrid(
   onInitialFocusRequested: () -> Unit = {},
   onMoveUpFromFirstRow: () -> Boolean = { true },
   onBackKey: (() -> Boolean)? = null,
-  horizontalPadding: Dp = BiliSizing.VideoGridHorizontalPadding,
-  topPadding: Dp = BiliFocus.ScrollInset,
+  horizontalPadding: Dp = uiDp(BiliSizing.VideoGridHorizontalPadding),
+  topPadding: Dp = uiDp(BiliFocus.ScrollInset),
   topBleed: Dp = 0.dp,
   keyFactory: (Int, VideoSummary) -> Any = { _, video -> video.bvid },
+  layoutSpec: VideoGridLayoutSpec,
+  viewportWidth: Dp,
 ) {
-  val columns = BiliSizing.VideoGridColumns
-  val rowCount = (videos.size + columns - 1) / columns
+  val ui = LocalUiMetrics.current
+  val spec = layoutSpec
+  val metrics = remember(spec.cardContentScale) { VideoCardMetrics(spec.cardContentScale) }
+  val columns = spec.columns
+  val rowCount = spec.rowCount(videos.size)
   val restoreTargetTracker = remember { TvGridFocusRestoreTargetTracker() }
   val frozenRestoreTargetIndex = restoreTargetTracker.targetIndex(
     requestKey = restoreFocusRequestKey,
@@ -132,7 +143,7 @@ internal fun TvVideoGrid(
   val restoreTargetRow = if (videos.isEmpty()) {
     0
   } else {
-    restoreTargetIndex / columns
+    spec.rowForIndex(restoreTargetIndex)
   }
   val listState = rememberLazyListState(initialFirstVisibleItemIndex = restoreTargetRow)
   val coroutineScope = rememberCoroutineScope()
@@ -140,13 +151,18 @@ internal fun TvVideoGrid(
   val density = LocalDensity.current
   val topBleedPx = with(density) { topBleed.roundToPx() }
   val focusScrollInsetPx = with(density) { topPadding.roundToPx() }
-  val focusedRowTopPaddingPx = with(density) { BiliFocus.FocusedRowTopPadding.roundToPx() }
-  val videoCardFallbackHeightPx = with(density) { BiliSizing.VideoCardMinHeight.roundToPx() }
+  val focusedRowTopPaddingPx = with(density) { ui.dp(BiliFocus.FocusedRowTopPadding).roundToPx() }
+  val videoCardFallbackHeightPx = with(density) { metrics.fallbackHeight.roundToPx() }
   val itemFocusRequesters = remember(videos.size) {
     List(videos.size) { FocusRequester() }
   }
   var focusScrollJob by remember { mutableStateOf<Job?>(null) }
   var focusedIndex by remember { mutableIntStateOf(-1) }
+  var gridHasFocus by remember { mutableStateOf(false) }
+  var focusedKey by remember { mutableStateOf<Any?>(null) }
+  val reflowTracker = remember { VideoGridReflowTracker() }
+  val videoKeys = rememberUpdatedState(videos.mapIndexed(keyFactory))
+  val reflowFocusAnchor = if (gridHasFocus && focusedIndex >= 0) VideoGridAnchor(focusedKey, focusedIndex) else null
   var navigationEntryTargetIndex by remember { mutableIntStateOf(0) }
   var rowScrollActive by remember { mutableStateOf(false) }
   var rowScrollGeneration by remember { mutableIntStateOf(0) }
@@ -162,7 +178,7 @@ internal fun TvVideoGrid(
     enabled = !rowScrollActive,
   )
 
-  LaunchedEffect(listState, videos.size, topBleedPx) {
+  LaunchedEffect(listState, videos.size, topBleedPx, columns) {
     snapshotFlow {
       listState.navigationEntryRow(topBleedPx)
     }
@@ -186,12 +202,37 @@ internal fun TvVideoGrid(
     )
   }
 
-  LaunchedEffect(restoreFocusRequestKey, videos.size) {
+  LaunchedEffect(listState, spec, viewportWidth, density.density, density.fontScale) {
+    if (reflowTracker.hasLayout && videoKeys.value.isNotEmpty() && restoreFocusRequestKey <= 0) {
+      focusScrollJob?.cancel()
+      rowScrollGeneration++
+      rowScrollActive = false
+      val anchor = reflowFocusAnchor ?: reflowTracker.anchor
+      val index = resolveVideoGridAnchorIndex(anchor, videoKeys.value)
+      if (reflowFocusAnchor != null) {
+        scrollRow(spec.rowForIndex(index), smoothScroll = false)
+        for (attempt in 0 until TvGridRestoreFocusRetryCount) {
+          withFrameNanos { }
+          if (runCatching { itemFocusRequesters[index].requestFocus() }.getOrDefault(false)) break
+        }
+      } else {
+        listState.scrollToItem(spec.rowForIndex(index), anchor.scrollOffset)
+      }
+    }
+    reflowTracker.hasLayout = true
+    snapshotFlow {
+      val keys = videoKeys.value
+      val index = (listState.firstVisibleItemIndex * columns).coerceIn(0, keys.lastIndex.coerceAtLeast(0))
+      VideoGridAnchor(keys.getOrNull(index), index, listState.firstVisibleItemScrollOffset)
+    }.collect { reflowTracker.anchor = it }
+  }
+
+  LaunchedEffect(restoreFocusRequestKey, videos.size, spec) {
     if (restoreFocusRequestKey <= 0 || videos.isEmpty()) {
       return@LaunchedEffect
     }
     val targetIndex = restoreTargetIndex
-    scrollRow(targetIndex / columns, smoothScroll = false)
+    scrollRow(spec.rowForIndex(targetIndex), smoothScroll = false)
     repeat(TvGridRestoreFocusRetryCount) {
       withFrameNanos { }
       val focused = runCatching {
@@ -256,34 +297,32 @@ internal fun TvVideoGrid(
   }
 
   fun moveFocus(fromIndex: Int, direction: Key): Boolean {
-    val currentRow = fromIndex / columns
-    val currentColumn = fromIndex % columns
-    val lastIndex = videos.lastIndex
-    val lastRow = lastIndex / columns
-
-    if (direction == Key.DirectionUp && currentRow == 0) {
-      commitFocusedItem(fromIndex)
-      return onMoveUpFromFirstRow()
+    val gridDirection = when (direction) {
+      Key.DirectionUp -> VideoGridDirection.Up
+      Key.DirectionDown -> VideoGridDirection.Down
+      Key.DirectionLeft -> VideoGridDirection.Left
+      Key.DirectionRight -> VideoGridDirection.Right
+      else -> return false
     }
-    if (direction == Key.DirectionLeft && currentColumn == 0) {
-      commitFocusedItem(fromIndex)
-      return onMoveLeftToNav()
+    return when (val move = resolveVideoGridFocusMove(fromIndex, videos.size, columns, gridDirection)) {
+      VideoGridFocusMove.AboveGrid -> {
+        commitFocusedItem(fromIndex)
+        onMoveUpFromFirstRow()
+      }
+      VideoGridFocusMove.Navigation -> {
+        commitFocusedItem(fromIndex)
+        onMoveLeftToNav()
+      }
+      VideoGridFocusMove.Stay -> true
+      is VideoGridFocusMove.Item -> {
+        if (gridDirection == VideoGridDirection.Left || gridDirection == VideoGridDirection.Right) {
+          focusItem(move.index)
+        } else {
+          scrollThenFocusItem(move.index, spec.rowForIndex(move.index))
+          true
+        }
+      }
     }
-
-    val targetIndex = when (direction) {
-      Key.DirectionUp -> ((currentRow - 1) * columns + currentColumn).coerceAtMost(lastIndex).takeIf { currentRow > 0 }
-      Key.DirectionDown -> ((currentRow + 1) * columns + currentColumn).coerceAtMost(lastIndex).takeIf { currentRow < lastRow }
-      Key.DirectionLeft -> (fromIndex - 1).takeIf { currentColumn > 0 }
-      Key.DirectionRight -> (fromIndex + 1).takeIf { currentColumn < columns - 1 && it <= lastIndex && it / columns == currentRow }
-      else -> null
-    } ?: return direction == Key.DirectionDown || direction == Key.DirectionRight
-
-    if (direction == Key.DirectionLeft || direction == Key.DirectionRight) {
-      return focusItem(targetIndex)
-    }
-
-    scrollThenFocusItem(targetIndex, targetIndex / columns)
-    return true
   }
 
   CompositionLocalProvider(LocalBringIntoViewSpec provides TvGridBringIntoViewSpec) {
@@ -291,6 +330,8 @@ internal fun TvVideoGrid(
       state = listState,
       modifier = modifier
         .fillMaxSize()
+        .onFocusChanged { gridHasFocus = it.hasFocus }
+        .focusGroup()
         .layout { measurable, constraints ->
           if (topBleedPx <= 0) {
             val placeable = measurable.measure(constraints)
@@ -320,9 +361,9 @@ internal fun TvVideoGrid(
         start = horizontalPadding,
         top = topPadding,
         end = horizontalPadding,
-        bottom = BiliSizing.VideoGridBottomPadding,
+        bottom = ui.dp(BiliSizing.VideoGridBottomPadding),
       ),
-      verticalArrangement = Arrangement.spacedBy(BiliSizing.VideoGridSpacing),
+      verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSizing.VideoGridSpacing)),
     ) {
       items(
         count = rowCount,
@@ -342,7 +383,7 @@ internal fun TvVideoGrid(
                 0f
               },
             ),
-          horizontalArrangement = Arrangement.spacedBy(BiliSizing.VideoGridSpacing),
+          horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSizing.VideoGridSpacing)),
         ) {
           repeat(columns) { column ->
             val index = row * columns + column
@@ -351,6 +392,7 @@ internal fun TvVideoGrid(
               VideoCard(
                 video = video,
                 mode = cardMode,
+                contentScale = spec.cardContentScale,
                 interactionPaused = rowScrollActive,
                 modifier = Modifier
                   .weight(1f)
@@ -377,6 +419,7 @@ internal fun TvVideoGrid(
                 },
                 onFocused = {
                   focusedIndex = index
+                  focusedKey = keyFactory(index, video)
                   commitFocusedItem(index)
                   if (index.shouldLoadMore(
                       totalItems = videos.size,

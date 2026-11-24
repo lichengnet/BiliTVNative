@@ -6,11 +6,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.kirin.bilitv.core.player.PlaybackCodecPreference
 import com.kirin.bilitv.core.player.PlaybackInfo
+import com.kirin.bilitv.core.player.PlaybackAttemptLimit
+import com.kirin.bilitv.core.player.PlaybackFailureKind
+import com.kirin.bilitv.core.device.DeviceCompatibility
+import com.kirin.bilitv.core.device.SessionEvent
+import com.kirin.bilitv.core.network.BiliApiCodeException
+import com.kirin.bilitv.core.network.BiliNetworkException
 import com.kirin.bilitv.core.player.PlaybackQuality
 import com.kirin.bilitv.core.player.PlaybackQualityPreference
 import com.kirin.bilitv.core.player.PlaybackRepository
 import com.kirin.bilitv.core.player.PlaybackRequest
 import com.kirin.bilitv.core.player.PlaybackTrack
+import com.kirin.bilitv.core.player.PlaybackTrace
 import com.kirin.bilitv.core.player.PlaybackVideoMetadata
 import kotlinx.coroutines.CancellationException
 
@@ -29,13 +36,21 @@ internal sealed interface PlayerScreenState {
     val info: PlaybackInfo,
     val startPositionMs: Long,
   ) : PlayerScreenState
-  data class Failed(val message: String) : PlayerScreenState
+  data class Failed(val message: String, val kind: PlaybackFailureKind = PlaybackFailureKind.Other, val diagnosticCode: String = "") : PlayerScreenState
 }
 
 internal class PlayerLoadStateHolder(
   initialRequest: PlaybackRequest,
   private val playbackRepository: PlaybackRepository,
 ) {
+  private var loadGeneration = 0L
+  var preparedStartPositionMs: Long? = null
+    private set
+  var lastTrace: PlaybackTrace? = null
+    private set
+
+  fun cancelLoad() { loadGeneration++ }
+
   var viewState by mutableStateOf(
     PlayerLoadViewState(
       activeRequest = initialRequest,
@@ -53,15 +68,28 @@ internal class PlayerLoadStateHolder(
     qualityPreference: PlaybackQualityPreference,
     missingCidMessage: String,
     emptyTracksMessage: String,
+    missingH264Message: String,
+    attemptLimit: PlaybackAttemptLimit? = null,
+    attemptQualityId: Int? = null,
+    resumePositionMs: Long? = null,
+    recoveryCid: Long? = null,
+    trace: PlaybackTrace? = null,
+    canTryLevel: ((String, Long) -> Boolean)? = null,
   ): PlayerScreenState.Ready? {
+    val loadToken = ++loadGeneration
     val loadRequest = viewState.activeRequest
+    preparedStartPositionMs = null
+    lastTrace = trace
+    fun current(): Boolean = loadGeneration == loadToken && viewState.activeRequest == loadRequest
     viewState = viewState.copy(screenState = PlayerScreenState.Loading)
     return try {
       val videoMetadata = fetchVideoMetadata(loadRequest)
-      if (viewState.activeRequest != loadRequest) return null
+      if (!current()) return null
       viewState = viewState.copy(metadata = videoMetadata)
 
-      var effectiveRequest = loadRequest.withNextHistoryEpisodeIfNeeded(videoMetadata)
+      var effectiveRequest = if (recoveryCid != null && recoveryCid > 0L) {
+        loadRequest.copy(cid = recoveryCid, forceStartPosition = true, advanceToNextHistoryEpisode = false)
+      } else loadRequest.withNextHistoryEpisodeIfNeeded(videoMetadata)
       if (effectiveRequest.canUseLatestSavedProgress()) {
         val latestSavedProgress = playbackRepository.getLatestSavedProgress(effectiveRequest.bvid)
         val latestSavedCid = latestSavedProgress?.cid?.takeIf { savedCid ->
@@ -76,7 +104,7 @@ internal class PlayerLoadStateHolder(
         ?: videoMetadata?.cid?.takeIf { it > 0L }
         ?: playbackRepository.resolveCid(effectiveRequest.bvid)
       if (cid <= 0L) {
-        fail(missingCidMessage)
+        if (current()) fail(missingCidMessage, PlaybackFailureKind.Other, "CID_MISSING")
         return null
       }
 
@@ -84,30 +112,41 @@ internal class PlayerLoadStateHolder(
         metadata = videoMetadata,
         cid = cid,
       )
-      if (viewState.activeRequest != loadRequest) return null
+      if (!current()) return null
       viewState = viewState.copy(displayRequest = resolvedRequest)
+      lastTrace = trace?.copy(bvid = resolvedRequest.bvid, cid = cid)
+
+      val savedPosition = if (resumePositionMs == null && resolvedRequest.preferredQualityId == null && !resolvedRequest.forceStartPosition) {
+        playbackRepository.getSavedProgress(resolvedRequest.bvid, resolvedRequest.cid)?.positionMs
+      } else null
+      val requestedStartPositionMs = resolvePlaybackStartPosition(resolvedRequest, savedPosition, resumePositionMs)
+      if (!current()) return null
+      preparedStartPositionMs = requestedStartPositionMs
 
       val info = playbackRepository.getPlaybackInfo(
-        request = resolvedRequest,
+        request = if (attemptQualityId != null) resolvedRequest.copy(preferredQualityId = attemptQualityId) else resolvedRequest,
         codecPreference = codecPreference,
         qualityPreference = qualityPreference,
+        attemptLimit = attemptLimit,
+        allowLevelTrial = canTryLevel?.invoke(resolvedRequest.bvid, cid) == true,
+        trace = lastTrace,
       )
+      if (!current()) return null
+      if (codecPreference == PlaybackCodecPreference.H264 && info.videoTracks.isEmpty() && info.audioTracks.isNotEmpty()) {
+        fail(missingH264Message, PlaybackFailureKind.VideoTracks, "VIDEO_TRACKS")
+        return null
+      }
       if (info.videoTracks.isEmpty() || info.audioTracks.isEmpty()) {
-        fail(emptyTracksMessage)
+        fail(emptyTracksMessage, if (info.audioTracks.isEmpty()) PlaybackFailureKind.Audio else PlaybackFailureKind.VideoTracks, "EMPTY_TRACKS")
         return null
       }
 
-      val requestedStartPositionMs = if (resolvedRequest.preferredQualityId != null || resolvedRequest.forceStartPosition) {
-        resolvedRequest.startPositionMs
-      } else {
-        playbackRepository.getSavedProgress(info.bvid, info.cid)?.positionMs
-          ?: resolvedRequest.startPositionMs
-      }
+      if (!current()) return null
       val readyState = PlayerScreenState.Ready(
         info = info,
         startPositionMs = requestedStartPositionMs,
       )
-      if (viewState.activeRequest == loadRequest) {
+      if (current()) {
         viewState = viewState.copy(
           screenState = readyState,
           selectedQuality = info.selectedQuality,
@@ -117,10 +156,20 @@ internal class PlayerLoadStateHolder(
     } catch (error: CancellationException) {
       throw error
     } catch (error: Exception) {
-      fail(error.message.orEmpty())
+      if (current()) {
+        lastTrace?.event(SessionEvent.PLAY_FAILURE, "LOAD", buildMap {
+          put("code", "LOAD_FAILED")
+          put("type", error.javaClass.simpleName)
+          if (error is BiliApiCodeException) put("apiCode", error.code.toString())
+          if (error is BiliNetworkException) put("http", error.statusCode.toString())
+        })
+        fail(if (DeviceCompatibility.current.isJacinto6) "" else error.message.orEmpty(), PlaybackFailureKind.Network, "LOAD_FAILED")
+      }
       null
     }
   }
+
+  fun markLoading() { viewState = viewState.copy(screenState = PlayerScreenState.Loading) }
 
   fun retry() {
     viewState = viewState.copy(
@@ -129,11 +178,13 @@ internal class PlayerLoadStateHolder(
     )
   }
 
-  fun fail(message: String) {
-    viewState = viewState.copy(screenState = PlayerScreenState.Failed(message))
+  fun fail(message: String, kind: PlaybackFailureKind = PlaybackFailureKind.Other, diagnosticCode: String = "") {
+    viewState = viewState.copy(screenState = PlayerScreenState.Failed(message, kind, diagnosticCode))
   }
 
   fun startPlaybackRequest(nextRequest: PlaybackRequest, clearMetadata: Boolean) {
+    cancelLoad()
+    preparedStartPositionMs = null
     viewState = viewState.copy(
       activeRequest = nextRequest,
       displayRequest = nextRequest,
@@ -144,11 +195,15 @@ internal class PlayerLoadStateHolder(
   }
 
   fun selectQuality(quality: PlaybackQuality, startPositionMs: Long) {
+    val nextRequest = (if (DeviceCompatibility.current.isJacinto6) viewState.displayRequest else viewState.activeRequest).copy(
+      startPositionMs = startPositionMs,
+      preferredQualityId = quality.id,
+    )
+    if (nextRequest == viewState.activeRequest && viewState.screenState is PlayerScreenState.Ready) return
+    cancelLoad()
+    preparedStartPositionMs = null
     viewState = viewState.copy(
-      activeRequest = viewState.activeRequest.copy(
-        startPositionMs = startPositionMs,
-        preferredQualityId = quality.id,
-      ),
+      activeRequest = nextRequest,
       screenState = PlayerScreenState.Loading,
       selectedQuality = quality,
     )

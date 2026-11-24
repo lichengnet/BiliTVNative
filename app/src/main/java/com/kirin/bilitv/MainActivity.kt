@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
           appCacheManager = appContainer.appCacheManager,
           searchHistoryStore = appContainer.searchHistoryStore,
           sessionStore = appContainer.sessionStore,
+          onExitApp = ::finishAndRemoveTask,
         )
       }
     }

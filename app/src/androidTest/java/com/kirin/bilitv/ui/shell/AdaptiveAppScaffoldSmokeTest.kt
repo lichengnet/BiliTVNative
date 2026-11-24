@@ -69,6 +69,7 @@ class AdaptiveAppScaffoldSmokeTest {
             navFocusRequesters = navFocusRequesters,
             contentPaddingEnabled = false,
             onAccountSelected = {},
+            onExitApp = {},
             onDestinationSelected = {},
             shouldAutoConfirmDestination = { false },
             onMoveRight = { false },

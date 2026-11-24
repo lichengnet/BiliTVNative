@@ -123,12 +123,26 @@ object BiliSizing {
   val AccountAvatarContainerSize = 50.dp
   val AccountProfileAvatarSize = 96.dp
   val AccountProfilePanelWidth = 520.dp
+  val AccountProfileIdentityMinWidth = 160.dp
   val AccountProfilePanelHeight = 180.dp
   val AccountVipBadgeSize = 20.dp
   val AccountProfileVipBadgeSize = 34.dp
   val ContentPadding = 16.dp
   val VideoCardWidth = 248.dp
   const val VideoGridColumns = 4
+  const val UiSizeSmallScale = 0.85f
+  const val UiSizeMediumScale = 1f
+  const val UiSizeLargeScale = 4f / 3f
+  val VideoCardPreferredMinWidth = 240.dp
+  val SettingsSectionPreferredMinWidth = 80.dp
+  val SettingsPanelPreferredMinWidth = 320.dp
+  val SettingsRowInlineMinWidth = 320.dp
+  val AboutLibraryPreferredMinWidth = 240.dp
+  val MinimumTouchTarget = 48.dp
+  val AboutScrollStep = 96.dp
+  val ToggleTrackWidth = 52.dp
+  val ToggleTrackHeight = 32.dp
+  val ToggleThumbSize = 24.dp
   val VideoGridSpacing = 10.dp
   val VideoGridHorizontalPadding = 0.dp
   val HomeVideoGridTopPadding = 24.dp
@@ -166,6 +180,7 @@ object BiliSizing {
   val SearchInputHeight = 44.dp
   val SearchKeyboardButtonHeight = 48.dp
   val SearchTouchInputHeight = 56.dp
+  val SearchTouchInputPreferredMinWidth = 160.dp
   val SearchTouchActionButtonWidth = 86.dp
   val SearchTouchTopPadding = 20.dp
   val SearchTouchContentTopPadding = 18.dp
@@ -242,6 +257,8 @@ object BiliSizing {
 }
 
 object BiliTypography {
+  val AboutProjectTitle = 28.sp
+  val AboutProjectSubtitle = 20.sp
   val ScreenTitle = 32.sp
   val SectionTitle = 18.sp
   val Body = 18.sp
@@ -291,6 +308,7 @@ object BiliMotion {
   const val FocusSpringStiffness = 560f
   const val PlayerControlsAutoHideMs = 4_000L
   const val PlayerProgressUpdateMs = 500L
+  const val PlayerLevelTrialFirstFrameTimeoutMs = 12_000L
   const val PlayerSeekPreviewAutoCommitMs = 1_200L
   const val PlayerClockUpdateMs = 30_000L
   const val TouchPullRefreshSpinnerRotationMs = 720

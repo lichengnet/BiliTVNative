@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.View
@@ -40,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -87,6 +89,10 @@ import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.kirin.bilitv.R
+import com.kirin.bilitv.core.device.CompatibilityDiagnostics
+import com.kirin.bilitv.core.device.DeviceCompatibility
+import com.kirin.bilitv.core.device.PlaybackLogLevel
+import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.model.VideoSummary
 import com.kirin.bilitv.core.model.isWatchCompleted
 import com.kirin.bilitv.core.model.shouldAdvanceToNextHistoryEpisode
@@ -97,14 +103,21 @@ import com.kirin.bilitv.core.player.DanmakuEntry
 import com.kirin.bilitv.core.player.DanmakuSettings
 import com.kirin.bilitv.core.player.DanmakuSettingsStore
 import com.kirin.bilitv.core.player.PlaybackInfo
+import com.kirin.bilitv.core.player.PlaybackRecoveryPolicy
+import com.kirin.bilitv.core.player.PlaybackFailureKind
+import com.kirin.bilitv.core.player.PlaybackFrameRate
+import com.kirin.bilitv.core.player.dashFrameRateAttribute
 import com.kirin.bilitv.core.player.PlaybackCodecPreference
 import com.kirin.bilitv.core.player.PlaybackQualityPreference
 import com.kirin.bilitv.core.player.PlaybackRepository
 import com.kirin.bilitv.core.player.PlaybackRequest
 import com.kirin.bilitv.core.player.PlaybackTrack
+import com.kirin.bilitv.core.player.PlaybackTrace
+import com.kirin.bilitv.core.player.PlaybackVideoSelectionMode
 import com.kirin.bilitv.core.player.PlayerComment
 import com.kirin.bilitv.core.player.VideoshotData
 import com.kirin.bilitv.core.player.createTvPlaybackLoadControl
+import com.kirin.bilitv.core.settings.AppSettingsStore
 import com.kirin.bilitv.ui.common.ClockOverlay
 import com.kirin.bilitv.ui.common.FeedStatusScreen
 import com.kirin.bilitv.ui.common.currentClockMinuteKey
@@ -122,6 +135,9 @@ import com.kirin.bilitv.ui.theme.BiliSizing
 import com.kirin.bilitv.ui.theme.BiliSpacing
 import com.kirin.bilitv.ui.theme.BiliTypography
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -153,6 +169,7 @@ fun PlayerScreen(
   captureExitFrame: Boolean = false,
   onExitFrameReady: (ImageBitmap?) -> Unit = {},
   onPlaybackRequestChanged: (PlaybackRequest) -> Unit = {},
+  playbackLogSettings: AppSettingsStore? = null,
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -236,11 +253,20 @@ fun PlayerScreen(
   val playerCompletionCoordinator = remember { PlayerCompletionCoordinator() }
   val completionReported = playerCompletionCoordinator.reported
   val controlsFocusRequester = remember { FocusRequester() }
-  val player = remember {
-    ExoPlayer.Builder(context)
-      .setLoadControl(createTvPlaybackLoadControl())
-      .build()
-  }
+  val compatibility = DeviceCompatibility.current
+  val recoveryPolicy = remember { PlaybackRecoveryPolicy().apply {
+    start(activeRequest.preferredQualityId ?: playbackQualityPreference.requestedQualityId, activeRequest.startPositionMs, activeRequest.bvid, activeRequest.cid)
+  } }
+  var playerGeneration by remember { mutableIntStateOf(0) }
+  var playbackResourcesAllowed by remember { mutableStateOf(true) }
+  var mediaPreparationJob by remember { mutableStateOf<Job?>(null) }
+  var recoveryJob by remember { mutableStateOf<Job?>(null) }
+  var lastSessionInput by remember { mutableStateOf<Triple<PlaybackRequest, PlaybackQualityPreference, PlaybackCodecPreference>?>(null) }
+  val player = remember(context, playerGeneration) { createCompatiblePlayer(context, compatibility.isJacinto6) }
+  val outputSession = remember(player) { PlayerOutputSession(player) }
+  val playbackLogSession = remember { outputSession.diagnosticId }
+  val latestOutputSession = rememberUpdatedState(outputSession)
+  val latestRecoveryPolicy = rememberUpdatedState(recoveryPolicy)
   var playerView by remember { mutableStateOf<PlayerView?>(null) }
   val playbackWakeLock = remember(context) {
     context.applicationContext.createPlayerWakeLock()
@@ -272,6 +298,8 @@ fun PlayerScreen(
       commentsLoadJob?.cancel()
       commentsLoadJob = null
       playerExitJob?.cancel()
+      recoveryJob?.cancel()
+      mediaPreparationJob?.cancel()
       playbackExitConfirmToast?.cancel()
       playbackCompletionToast?.cancel()
     }
@@ -539,6 +567,10 @@ fun PlayerScreen(
   }
 
   fun finishPlayer(onFinished: () -> Unit) {
+    recoveryJob?.cancel()
+    mediaPreparationJob?.cancel()
+    playerLoadStateHolder.cancelLoad()
+    recoveryPolicy.invalidate()
     if (playerExitJob?.isActive == true) {
       return
     }
@@ -552,6 +584,7 @@ fun PlayerScreen(
         null
       }
       onExitFrameReady(exitFrame)
+      outputSession.stop()
       onFinished()
     }
   }
@@ -728,12 +761,15 @@ fun PlayerScreen(
     if (completionReported) {
       cancelPendingCompletionAction()
     }
-    if (player.isPlaying) {
+    val playingRequested = if (compatibility.isJacinto6) player.playWhenReady else player.isPlaying
+    if (playingRequested) {
+      if (compatibility.isJacinto6) recoveryPolicy.pausedByUser = true
       player.pause()
       playbackPaused = true
       showControls()
       saveAndReportProgress()
     } else {
+      if (compatibility.isJacinto6) recoveryPolicy.pausedByUser = false
       player.play()
       playbackPaused = false
       hideControlsForPlayback()
@@ -741,6 +777,9 @@ fun PlayerScreen(
   }
 
 	  fun startPlaybackRequest(nextRequest: PlaybackRequest, clearMetadata: Boolean) {
+	    if (compatibility.isJacinto6 && playerLoadStateHolder.viewState.activeRequest != nextRequest) {
+	      recoveryPolicy.invalidate()
+	    }
 	    cancelPendingCompletionAction()
 	    resetOnlineCountPolling()
 	    playerSidePanelStateHolder.clearVideos()
@@ -867,11 +906,16 @@ fun PlayerScreen(
       }
       PlayerPanel.Quality -> {
         val quality = info.qualities.getOrNull(focusedPanelIndex) ?: return
+        val previousRequest = playerLoadStateHolder.viewState.activeRequest
         playerLoadStateHolder.selectQuality(
           quality = quality,
-          startPositionMs = player.currentPosition.takeIf { it > 0L } ?: playbackPositionState.longValue,
+          startPositionMs = player.currentPosition.takeIf { it >= 0L } ?: playbackPositionState.longValue,
         )
-        latestOnPlaybackRequestChanged.value(playerLoadStateHolder.viewState.activeRequest)
+        val nextRequest = playerLoadStateHolder.viewState.activeRequest
+        if (previousRequest != nextRequest) {
+          if (compatibility.isJacinto6) recoveryPolicy.invalidate()
+          latestOnPlaybackRequestChanged.value(nextRequest)
+        }
       }
       PlayerPanel.Danmaku -> {
         when (focusedPanelIndex) {
@@ -1062,11 +1106,13 @@ fun PlayerScreen(
 
   BackHandler(onBack = ::closePanelOrControls)
 
-  DisposableEffect(activity, rootView, playbackWakeLock) {
+  DisposableEffect(activity, rootView, playbackWakeLock, playbackResourcesAllowed) {
     val previousKeepScreenOn = rootView.keepScreenOn
-    activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    rootView.keepScreenOn = true
-    acquirePlaybackWakeLock()
+    if (playbackResourcesAllowed) {
+      activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      rootView.keepScreenOn = true
+      acquirePlaybackWakeLock()
+    }
 
     onDispose {
       rootView.keepScreenOn = previousKeepScreenOn
@@ -1075,13 +1121,88 @@ fun PlayerScreen(
     }
   }
 
+  fun rebuildPlayer(manual: Boolean = false) {
+    recoveryJob?.cancel()
+    mediaPreparationJob?.cancel()
+    playerLoadStateHolder.cancelLoad()
+    if (manual) {
+      outputSession.trace?.event(SessionEvent.PLAY_RECOVERY, "MANUAL_RETRY")
+      recoveryPolicy.manualRetry()
+    }
+    val token = recoveryPolicy.generation
+    playerLoadStateHolder.markLoading()
+    playbackResourcesAllowed = false
+    releasePlaybackWakeLock()
+    if (!outputSession.release()) {
+      playerLoadStateHolder.fail("", PlaybackFailureKind.Other, "RELEASE_FAILED")
+      return
+    }
+    recoveryJob = coroutineScope.launch {
+      delay(250)
+      if (!recoveryPolicy.isCurrent(token) || playerExitJob?.isActive == true) return@launch
+      playbackResourcesAllowed = true
+      playerGeneration++
+    }
+  }
+
+  fun handlePlayerFailure(kind: PlaybackFailureKind, code: String, error: Throwable? = null) {
+    val trace = outputSession.trace
+    trace?.event(SessionEvent.PLAY_FAILURE, kind.name, mapOf("code" to code) + error?.let(::playerFailureFields).orEmpty())
+    if (!compatibility.isJacinto6) {
+      playerLoadStateHolder.fail(error?.message.orEmpty(), kind, code)
+      return
+    }
+    val ready = playerLoadStateHolder.viewState.screenState as? PlayerScreenState.Ready
+    if (!outputSession.isReleased && ready != null) {
+      if (player.mediaItemCount > 0) recoveryPolicy.updatePosition(player.currentPosition)
+      val position = recoveryPolicy.lastPositionMs
+      val duration = player.duration.takeIf { it != C.TIME_UNSET } ?: playbackDurationState.longValue
+      coroutineScope.launch {
+        try { playbackRepository.saveProgress(ready.info.bvid, ready.info.cid, position, duration) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { CompatibilityDiagnostics.record("player progress save failed") }
+      }
+    }
+    cancelPendingCompletionAction()
+    onlineCountRequestJob?.cancel()
+    commentsLoadJob?.cancel()
+    if (recoveryPolicy.next(kind)) {
+      trace?.event(SessionEvent.PLAY_RECOVERY, "AUTO_RETRY", mapOf(
+        "code" to code, "nextQn" to recoveryPolicy.qualityId.toString(),
+      ))
+      rebuildPlayer()
+    } else {
+      mediaPreparationJob?.cancel()
+      playerLoadStateHolder.cancelLoad()
+      playbackResourcesAllowed = false
+      releasePlaybackWakeLock()
+      outputSession.release()
+      playerLoadStateHolder.fail("", kind, code)
+    }
+  }
+  val latestFailureHandler = rememberUpdatedState(::handlePlayerFailure)
+
   DisposableEffect(player) {
+    val diagnostics = if (CompatibilityDiagnostics.enabled) playerDiagnostics(trace = { outputSession.trace },
+      isCurrent = { !outputSession.isReleased && latestOutputSession.value === outputSession && (!compatibility.isJacinto6 || outputSession.mediaGeneration == latestRecoveryPolicy.value.generation) },
+    ) else null
+    diagnostics?.let(player::addAnalyticsListener)
     val listener = object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
-        playerLoadStateHolder.fail(error.message.orEmpty())
+        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
+        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
+        latestFailureHandler.value(playerFailureKind(error), "D" + error.errorCode, error)
+      }
+
+      override fun onRenderedFirstFrame() {
+        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
+        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
+        outputSession.onFirstFrame()
       }
 
       override fun onIsPlayingChanged(isPlaying: Boolean) {
+        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
+        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
         playerActuallyPlaying = isPlaying
         val pausedByUser = !isPlaying && !player.playWhenReady && player.playbackState != Player.STATE_ENDED
         playbackPaused = pausedByUser
@@ -1092,6 +1213,8 @@ fun PlayerScreen(
       }
 
       override fun onPlaybackStateChanged(playbackState: Int) {
+        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
+        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
         if (playbackState == Player.STATE_ENDED && latestPlayerState.value is PlayerScreenState.Ready && player.mediaItemCount > 0) {
           latestReportPlaybackCompleted.value()
         }
@@ -1100,7 +1223,11 @@ fun PlayerScreen(
     player.addListener(listener)
     onDispose {
       player.removeListener(listener)
-      player.release()
+      try {
+        outputSession.release()
+      } finally {
+        diagnostics?.let(player::removeAnalyticsListener)
+      }
     }
   }
 
@@ -1109,16 +1236,15 @@ fun PlayerScreen(
       when (event) {
         Lifecycle.Event.ON_PAUSE -> {
           checkpointPlaybackSession(
-            player.currentPosition.takeIf { position -> position >= 0L }
-              ?: playbackPositionState.longValue,
+            if (!outputSession.isReleased) player.currentPosition.takeIf { position -> position >= 0L } ?: playbackPositionState.longValue else playbackPositionState.longValue,
           )
           saveAndReportProgress()
           releasePlaybackWakeLock()
-          player.pause()
+          if (!outputSession.isReleased) player.pause()
         }
         Lifecycle.Event.ON_RESUME -> {
-          acquirePlaybackWakeLock()
-          if (playerState is PlayerScreenState.Ready) {
+          if (playbackResourcesAllowed) acquirePlaybackWakeLock()
+          if (playerState is PlayerScreenState.Ready && !outputSession.isReleased && !recoveryPolicy.pausedByUser) {
             player.play()
           }
         }
@@ -1131,7 +1257,43 @@ fun PlayerScreen(
     }
   }
 
-  LaunchedEffect(activeRequest, playbackCodecPreference, playbackQualityPreference, loadRetryToken) {
+  LaunchedEffect(activeRequest, playbackCodecPreference, playbackQualityPreference, loadRetryToken, player) {
+    val preparation = currentCoroutineContext()[Job]
+    mediaPreparationJob = preparation
+    val inputKey = Triple(activeRequest, playbackQualityPreference, playbackCodecPreference)
+    if (compatibility.isJacinto6 && lastSessionInput != inputKey) {
+      recoveryJob?.cancel()
+      recoveryPolicy.start(activeRequest.preferredQualityId ?: playbackQualityPreference.requestedQualityId,
+        activeRequest.startPositionMs, activeRequest.bvid, activeRequest.cid)
+      val previousInput = lastSessionInput
+      lastSessionInput = inputKey
+      if (previousInput != null) {
+        playerLoadStateHolder.cancelLoad()
+        playbackResourcesAllowed = false
+        if (!outputSession.release()) {
+          playerLoadStateHolder.fail("", PlaybackFailureKind.Other, "RELEASE_FAILED")
+          return@LaunchedEffect
+        }
+        delay(250)
+        playbackResourcesAllowed = true
+        playerGeneration++
+        return@LaunchedEffect
+      }
+    }
+    val preparationToken = recoveryPolicy.generation
+    if (outputSession.isReleased) return@LaunchedEffect
+    val trace = if (CompatibilityDiagnostics.enabled) PlaybackTrace(
+      playbackLogSession, outputSession.diagnosticId,
+      if (compatibility.isJacinto6) preparationToken else loadRetryToken,
+      if (compatibility.isJacinto6) recoveryPolicy.attemptCount else (loadRetryToken + 1).toInt(),
+      activeRequest.bvid, activeRequest.cid,
+    ) else null
+    outputSession.trace = trace
+    trace?.event(SessionEvent.PLAY_ATTEMPT, "START", mapOf(
+      "jacinto6" to compatibility.isJacinto6.toString(),
+      "requestedQn" to (if (compatibility.isJacinto6) recoveryPolicy.qualityId else activeRequest.preferredQualityId)
+        ?.toString().orEmpty().ifEmpty { playbackQualityPreference.requestedQualityId.toString() },
+    ))
 	    cancelPendingCompletionAction()
 	    previewPositionMs = null
 	    touchGestureStateHolder.clearSeek()
@@ -1155,11 +1317,35 @@ fun PlayerScreen(
     player.clearMediaItems()
     playerCompletionCoordinator.clearReported()
     val readyState = playerLoadStateHolder.load(
-      codecPreference = playbackCodecPreference,
+      codecPreference = if (compatibility.isJacinto6) PlaybackCodecPreference.H264 else playbackCodecPreference,
       qualityPreference = playbackQualityPreference,
       missingCidMessage = context.getString(R.string.player_error_missing_cid),
       emptyTracksMessage = context.getString(R.string.player_error_empty_tracks),
-    ) ?: return@LaunchedEffect
+      missingH264Message = context.getString(R.string.player_error_h264_unavailable),
+      attemptLimit = if (compatibility.isJacinto6) recoveryPolicy.limit else null,
+      attemptQualityId = if (compatibility.isJacinto6) recoveryPolicy.qualityId else null,
+      resumePositionMs = if (compatibility.isJacinto6) recoveryPolicy.resumePositionOverride else null,
+      recoveryCid = if (compatibility.isJacinto6) recoveryPolicy.recoveryCid else null,
+      trace = trace,
+      canTryLevel = if (compatibility.isJacinto6) recoveryPolicy::canTryLevel else null,
+    )
+    if (!recoveryPolicy.isCurrent(preparationToken) || outputSession.isReleased) return@LaunchedEffect
+    outputSession.trace = playerLoadStateHolder.lastTrace
+    if (readyState == null) {
+      val failure = playerLoadStateHolder.viewState.screenState as? PlayerScreenState.Failed
+      if (compatibility.isJacinto6) {
+        playerLoadStateHolder.preparedStartPositionMs?.let {
+          recoveryPolicy.updatePosition(it)
+          recoveryPolicy.resolvedCid = playerLoadStateHolder.viewState.displayRequest.cid.takeIf { cid -> cid > 0L }
+        }
+        if (failure != null) handlePlayerFailure(failure.kind, failure.diagnosticCode)
+      } else if (failure != null) {
+        outputSession.trace?.event(SessionEvent.PLAY_FAILURE, failure.kind.name, mapOf("code" to failure.diagnosticCode))
+      }
+      return@LaunchedEffect
+    }
+    recoveryPolicy.accepted(readyState.info)
+    recoveryPolicy.updatePosition(readyState.startPositionMs)
     checkpointPlaybackSession(readyState.startPositionMs)
     try {
       val info = readyState.info
@@ -1173,20 +1359,40 @@ fun PlayerScreen(
           ).create(),
         ),
       ).createMediaSource(buildDashMediaItem(info))
-      player.setMediaSource(mediaSource)
+      if (compatibility.useTextureView) withTimeout(2_000) { outputSession.awaitTextureOutput() }
+      if (!recoveryPolicy.isCurrent(preparationToken) || outputSession.isReleased) return@LaunchedEffect
+      outputSession.mediaGeneration = preparationToken
+      outputSession.trace?.event(SessionEvent.PLAY_ATTEMPT, "OUTPUT_READY",
+        mapOf("source" to if (compatibility.useTextureView) "TextureView" else "SurfaceView"), PlaybackLogLevel.Debug)
+      player.setMediaSource(mediaSource, readyState.startPositionMs)
+      val levelTrial = info.videoSelectionMode == PlaybackVideoSelectionMode.LevelTrial
+      if (levelTrial) {
+        if (!recoveryPolicy.submitLevelTrial(preparationToken, info)) {
+          handlePlayerFailure(PlaybackFailureKind.Other, "LEVEL_TRIAL_LIMIT")
+          return@LaunchedEffect
+        }
+        outputSession.trace?.event(SessionEvent.PLAY_ATTEMPT, "LEVEL_TRIAL", mapOf("selectedQn" to info.selectedQuality.id.toString()))
+      }
       player.prepare()
       player.setPlaybackSpeed(playbackSpeed)
       if (readyState.startPositionMs > 0L) {
-        player.seekTo(readyState.startPositionMs)
         playbackPositionState.longValue = readyState.startPositionMs
         danmakuSyncToken += 1L
       }
-      player.playWhenReady = true
-      playbackPaused = false
+      player.playWhenReady = !compatibility.isJacinto6 ||
+        (!recoveryPolicy.pausedByUser && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+      playbackPaused = compatibility.isJacinto6 && recoveryPolicy.pausedByUser
+      if (levelTrial && !outputSession.awaitTrialFirstFrame(lifecycleOwner.lifecycle, BiliMotion.PlayerLevelTrialFirstFrameTimeoutMs) &&
+        recoveryPolicy.isCurrent(preparationToken) && !outputSession.isReleased
+      ) {
+        handlePlayerFailure(PlaybackFailureKind.Decoder, "LEVEL_TRIAL_TIMEOUT")
+      }
+    } catch (error: TimeoutCancellationException) {
+      if (recoveryPolicy.isCurrent(preparationToken)) handlePlayerFailure(PlaybackFailureKind.Output, "OUTPUT_TIMEOUT", error)
     } catch (error: CancellationException) {
       throw error
     } catch (error: Exception) {
-      playerLoadStateHolder.fail(error.message.orEmpty())
+      if (recoveryPolicy.isCurrent(preparationToken)) handlePlayerFailure(PlaybackFailureKind.Other, "PREPARE_FAILED", error)
     }
   }
 
@@ -1199,9 +1405,14 @@ fun PlayerScreen(
 
   LaunchedEffect(player, playerState) {
     while (isActive) {
+      if (outputSession.isReleased) return@LaunchedEffect
       val nowMs = SystemClock.elapsedRealtime()
-      val currentPositionMs = player.currentPosition.takeIf { it >= 0L } ?: 0L
+      val playerPositionMs = player.currentPosition
+      val currentPositionMs = playerPositionMs.coerceAtLeast(0L)
       playbackPositionState.longValue = currentPositionMs
+      if (playerState is PlayerScreenState.Ready && player.mediaItemCount > 0) {
+        recoveryPolicy.updatePosition(playerPositionMs)
+      }
       playbackDurationState.longValue = player.duration.takeIf { it != C.TIME_UNSET }
         ?: playbackDurationState.longValue
       playbackBufferedPercentageState.longValue = player.bufferedPercentage.toLong()
@@ -1469,38 +1680,62 @@ fun PlayerScreen(
         }
       },
   ) {
+    key(outputSession.diagnosticId) {
     AndroidView(
       factory = { viewContext ->
-        PlayerView(viewContext).apply {
+        val view = if (compatibility.useTextureView) {
+          LayoutInflater.from(viewContext).inflate(R.layout.player_view_texture, null, false) as PlayerView
+        } else {
+          PlayerView(viewContext)
+        }
+        view.apply {
           useController = false
-          keepScreenOn = true
+          keepScreenOn = playbackResourcesAllowed
           resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
           setShutterBackgroundColor(android.graphics.Color.BLACK)
-          this.player = player
+          outputSession.attach(this)
           playerView = this
         }
       },
       update = { view ->
-        view.keepScreenOn = true
-        view.player = player
+        view.keepScreenOn = playbackResourcesAllowed && !outputSession.isReleased
+        outputSession.attach(view)
         playerView = view
+      },
+      onRelease = { view ->
+        outputSession.detach(view)
+        if (playerView === view) playerView = null
       },
       modifier = Modifier.fillMaxSize(),
     )
+    }
 
     Box(
       modifier = Modifier
         .fillMaxSize(),
     ) {
+      val attemptedQualityLabel = when (recoveryPolicy.qualityId) {
+        64 -> stringResource(R.string.settings_playback_quality_720)
+        32 -> stringResource(R.string.settings_playback_quality_480)
+        16 -> stringResource(R.string.player_playback_quality_360)
+        80 -> stringResource(R.string.settings_playback_quality_1080)
+        else -> selectedQuality?.description ?: stringResource(R.string.settings_playback_quality_highest)
+      }
       when (val state = playerState) {
-        PlayerScreenState.Loading -> PlayerLoadingOverlay()
+        PlayerScreenState.Loading -> PlayerLoadingOverlay(
+          if (compatibility.isJacinto6 && recoveryPolicy.attemptCount > 1) stringResource(R.string.player_recovering_quality, attemptedQualityLabel) else null,
+        )
         is PlayerScreenState.Failed -> PlayerFailedOverlay(
-          message = stringResource(R.string.player_failed_with_message, state.message),
+          message = if ((compatibility.isJacinto6 || CompatibilityDiagnostics.enabled) && state.diagnosticCode.isNotBlank()) stringResource(
+            R.string.player_failed_diagnostic, attemptedQualityLabel, state.diagnosticCode,
+          ) else stringResource(R.string.player_failed_with_message, state.message),
           touchMode = touchMode,
           onRetry = {
-            playerLoadStateHolder.retry()
+            if (compatibility.isJacinto6) rebuildPlayer(manual = true) else playerLoadStateHolder.retry()
           },
           onBack = ::exitPlayer,
+          logSettings = playbackLogSettings?.takeIf { CompatibilityDiagnostics.enabled },
+          trace = outputSession.trace,
         )
         is PlayerScreenState.Ready -> {
           PlayerDanmakuLayer(
@@ -1721,7 +1956,7 @@ fun PlayerScreen(
 }
 
 @Composable
-private fun PlayerLoadingOverlay() {
+private fun PlayerLoadingOverlay(statusMessage: String? = null) {
   Box(
     modifier = Modifier.fillMaxSize(),
     contentAlignment = Alignment.Center,
@@ -1732,7 +1967,7 @@ private fun PlayerLoadingOverlay() {
     ) {
       CircularProgressIndicator(color = BiliColors.BiliPink)
       Text(
-        text = stringResource(R.string.player_loading),
+        text = statusMessage ?: stringResource(R.string.player_loading),
         color = BiliColors.TextPrimary,
         fontSize = BiliTypography.Body,
       )
@@ -1746,13 +1981,15 @@ private fun PlayerFailedOverlay(
   touchMode: Boolean,
   onRetry: () -> Unit,
   onBack: () -> Unit,
+  logSettings: AppSettingsStore?,
+  trace: PlaybackTrace?,
 ) {
   Box(modifier = Modifier.fillMaxSize()) {
-    FeedStatusScreen(
-      message = message,
-      actionLabel = stringResource(R.string.action_retry),
-      onAction = onRetry,
-    )
+    if (logSettings != null) {
+      PlayerFailureLogActions(message, logSettings, trace, onRetry)
+    } else {
+      FeedStatusScreen(message = message, actionLabel = stringResource(R.string.action_retry), onAction = onRetry)
+    }
     if (touchMode) {
       PlayerFailedBackButton(
         onClick = onBack,
@@ -1834,7 +2071,7 @@ private fun PlaybackTrack.toRepresentation(adaptationSetId: String, contentType:
     ""
   }
   return """
-    <Representation id="${adaptationSetId}_$id" bandwidth="$bandwidth" codecs="${codecs.escapeXml()}"$dimensions>
+    <Representation id="${adaptationSetId}_$id" bandwidth="$bandwidth" codecs="${codecs.escapeXml()}"$dimensions${dashFrameRateAttribute(frameRate, adaptationSetId == "0")}>
       <BaseURL>$escapedUrl</BaseURL>
       <SegmentBase indexRange="${segmentBase.indexRange.escapeXml()}">
         <Initialization range="${segmentBase.initializationRange.escapeXml()}" />

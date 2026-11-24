@@ -1,6 +1,11 @@
 package com.kirin.bilitv.ui.home
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+import com.kirin.bilitv.ui.theme.uiDp
+
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -31,24 +36,32 @@ internal fun AdaptiveVideoGrid(
   onInitialFocusRequested: () -> Unit = {},
   onMoveUpFromFirstRow: () -> Boolean = { true },
   onBackKey: (() -> Boolean)? = null,
-  horizontalPadding: Dp = BiliSizing.VideoGridHorizontalPadding,
-  topPadding: Dp = BiliFocus.ScrollInset,
+  horizontalPadding: Dp = uiDp(BiliSizing.VideoGridHorizontalPadding),
+  topPadding: Dp = uiDp(BiliFocus.ScrollInset),
   topBleed: Dp = 0.dp,
   keyFactory: (Int, VideoSummary) -> Any = { _, video -> video.bvid },
+  layoutSpec: VideoGridLayoutSpec? = null,
 ) {
+  val ui = LocalUiMetrics.current
+  BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    val spec = layoutSpec ?: resolveVideoGridLayoutSpec((maxWidth - horizontalPadding * 2).value, ui.scale)
   when (LocalInteractionProfile.current.inputMode) {
     InputMode.Touch -> TouchVideoGrid(
       videos = videos,
+      restoredFocusIndex = restoredFocusIndex,
+      restoreFocusRequestKey = restoreFocusRequestKey,
+      onRestoreFocusHandled = onRestoreFocusHandled,
       onFocusedIndexChange = onFocusedIndexChange,
       onLoadMore = onLoadMore,
       onRefresh = onRefresh,
       onVideoSelected = onVideoSelected,
-      modifier = modifier,
+      modifier = Modifier.fillMaxSize(),
       cardMode = cardMode,
       horizontalPadding = horizontalPadding,
       topPadding = topPadding,
       topBleed = topBleed,
       keyFactory = keyFactory,
+      layoutSpec = spec,
     )
 
     InputMode.Remote -> TvVideoGrid(
@@ -61,7 +74,7 @@ internal fun AdaptiveVideoGrid(
       onLoadMore = onLoadMore,
       onMoveLeftToNav = onMoveLeftToNav,
       onVideoSelected = onVideoSelected,
-      modifier = modifier,
+      modifier = Modifier.fillMaxSize(),
       cardMode = cardMode,
       requestInitialFocus = requestInitialFocus,
       onInitialFocusRequested = onInitialFocusRequested,
@@ -71,6 +84,9 @@ internal fun AdaptiveVideoGrid(
       topPadding = topPadding,
       topBleed = topBleed,
       keyFactory = keyFactory,
+      layoutSpec = spec,
+      viewportWidth = maxWidth,
     )
+  }
   }
 }

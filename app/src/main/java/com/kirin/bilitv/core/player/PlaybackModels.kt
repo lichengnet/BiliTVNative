@@ -28,7 +28,10 @@ data class PlaybackInfo(
   val videoTracks: List<PlaybackTrack>,
   val audioTracks: List<PlaybackTrack>,
   val headers: BiliPlaybackHeaders,
+  val videoSelectionMode: PlaybackVideoSelectionMode = PlaybackVideoSelectionMode.Normal,
 )
+
+enum class PlaybackVideoSelectionMode { Normal, LevelTrial }
 
 data class PlaybackQuality(
   val id: Int,
@@ -66,6 +69,7 @@ data class PlaybackTrack(
   val height: Int,
   val mimeType: String,
   val segmentBase: PlaybackSegmentBase,
+  val frameRate: String? = null,
 ) {
   val isH264: Boolean
     get() = codecs.contains("avc", ignoreCase = true)

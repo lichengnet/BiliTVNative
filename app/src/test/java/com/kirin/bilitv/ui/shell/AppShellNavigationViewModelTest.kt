@@ -7,6 +7,19 @@ import org.junit.Test
 
 class AppShellNavigationViewModelTest {
   @Test
+  fun touchFocusNeverAutoSelectsEvenForUnvisitedDestination() {
+    for (enabled in listOf(false, true)) for (pending in listOf(false, true)) {
+      assertFalse(shouldAutoConfirmDestinationOnFocus(enabled, false, pending, remoteInput = false))
+    }
+  }
+
+  @Test
+  fun remoteAutoConfirmationStillWorksAfterStartup() {
+    assertTrue(shouldAutoConfirmDestinationOnFocus(true, true, false, remoteInput = true))
+    assertFalse(shouldAutoConfirmDestinationOnFocus(true, false, true, remoteInput = true))
+  }
+
+  @Test
   fun freshInstanceStartsOnRecommend() {
     val state = AppShellNavigationViewModel().state.value
 

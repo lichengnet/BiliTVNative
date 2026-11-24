@@ -3,6 +3,8 @@ package com.kirin.bilitv.core.settings
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -12,15 +14,28 @@ import com.kirin.bilitv.core.model.HomeSection
 import com.kirin.bilitv.core.player.PlaybackCodecPreference
 import com.kirin.bilitv.core.player.PlaybackQualityPreference
 import com.kirin.bilitv.core.storage.biliDataStore
+import com.kirin.bilitv.core.device.PlaybackLogLevel
+import java.io.IOException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
-class AppSettingsStore(private val context: Context) {
+class AppSettingsStore(private val context: Context, private val dataStore: DataStore<Preferences> = context.biliDataStore) {
+  val playbackLogLevel: Flow<PlaybackLogLevel> = dataStore.data
+    .map { PlaybackLogLevel.fromKey(it[Keys.PlaybackLogLevel]) }
+    .catch { if (it is IOException) emit(PlaybackLogLevel.Info) else throw it }
+    .distinctUntilChanged()
+
+  suspend fun setPlaybackLogLevel(level: PlaybackLogLevel) {
+    dataStore.edit { it[Keys.PlaybackLogLevel] = level.key }
+  }
+
   private val defaultVisualPerformanceMode by lazy(LazyThreadSafetyMode.NONE) {
     context.defaultVisualPerformanceMode()
   }
 
-  val settings: Flow<AppSettings> = context.biliDataStore.data.map { preferences ->
+  val settings: Flow<AppSettings> = dataStore.data.map { preferences ->
     val enabledSections = preferences[Keys.EnabledHomeSections]
       ?.mapNotNull(HomeSection::fromKey)
       ?.toSet()
@@ -40,6 +55,7 @@ class AppSettingsStore(private val context: Context) {
       }
 
     AppSettings(
+      uiSize = AppUiSize.fromKey(preferences[Keys.UiSize]),
       visualPerformanceMode = visualPerformanceMode,
       homeThemeVariant = HomeThemeVariant.fromKey(preferences[Keys.HomeThemeVariant]),
       chineseTextVariant = ChineseTextVariant.fromKey(preferences[Keys.ChineseTextVariant]),
@@ -65,86 +81,86 @@ class AppSettingsStore(private val context: Context) {
   }
 
   suspend fun setVisualPerformanceMode(mode: AppVisualPerformanceMode) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.VisualPerformanceMode] = mode.key
       preferences[Keys.LowSpecMode] = mode == AppVisualPerformanceMode.Smooth
     }
   }
 
   suspend fun setHomeThemeVariant(variant: HomeThemeVariant) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.HomeThemeVariant] = variant.key
     }
   }
 
   suspend fun setChineseTextVariant(variant: ChineseTextVariant) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.ChineseTextVariant] = variant.key
     }
   }
 
   suspend fun setSeekPreviewSpritesEnabled(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.SeekPreviewSpritesEnabled] = enabled
     }
   }
 
   suspend fun setPlaybackCodecPreference(preference: PlaybackCodecPreference) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.PlaybackCodecPreference] = preference.key
     }
   }
 
   suspend fun setPlaybackQualityPreference(preference: PlaybackQualityPreference) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.PlaybackQualityPreference] = preference.key
     }
   }
 
   suspend fun setAirJumpAssistantEnabled(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.AirJumpAssistantEnabled] = enabled
     }
   }
 
   suspend fun setConfirmPlaybackExit(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.ConfirmPlaybackExit] = enabled
     }
   }
 
   suspend fun setAutoPlayNextEpisode(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.AutoPlayNextEpisode] = enabled
     }
   }
 
   suspend fun setAutoPlayRelatedVideo(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.AutoPlayRelatedVideo] = enabled
     }
   }
 
   suspend fun setAutoReturnHomeOnCompletion(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.AutoReturnHomeOnCompletion] = enabled
     }
   }
 
   suspend fun setShowClock(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.ShowClock] = enabled
     }
   }
 
   suspend fun setShowMiniProgressBar(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.ShowMiniProgressBar] = enabled
     }
   }
 
   suspend fun setAutoConfirmOnFocus(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.AutoConfirmOnFocus] = enabled
       if (!enabled) {
         preferences[Keys.AutoRefreshOnSwitch] = false
@@ -153,19 +169,19 @@ class AppSettingsStore(private val context: Context) {
   }
 
   suspend fun setAutoRefreshOnSwitch(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.AutoRefreshOnSwitch] = enabled && (preferences[Keys.AutoConfirmOnFocus] ?: false)
     }
   }
 
   suspend fun setLiquidGlassCardsEnabled(enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       preferences[Keys.LiquidGlassCardsEnabled] = enabled && supportsLiquidGlassCards()
     }
   }
 
   suspend fun setHomeSectionEnabled(section: HomeSection, enabled: Boolean) {
-    context.biliDataStore.edit { preferences ->
+    dataStore.edit { preferences ->
       val current = preferences[Keys.EnabledHomeSections]
         ?.mapNotNull(HomeSection::fromKey)
         ?.toMutableSet()
@@ -181,7 +197,13 @@ class AppSettingsStore(private val context: Context) {
     }
   }
 
+  suspend fun setUiSize(size: AppUiSize) {
+    dataStore.edit { it[Keys.UiSize] = size.key }
+  }
+
   private object Keys {
+    val PlaybackLogLevel = stringPreferencesKey("playback_log_level")
+    val UiSize = stringPreferencesKey("ui_size")
     val LowSpecMode = booleanPreferencesKey("low_spec_mode")
     val VisualPerformanceMode = stringPreferencesKey("visual_performance_mode")
     val HomeThemeVariant = stringPreferencesKey("home_theme_variant")

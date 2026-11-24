@@ -50,6 +50,7 @@ internal fun shouldAutoConfirmDestinationOnFocus(
   autoConfirmOnFocus: Boolean,
   destinationVisited: Boolean,
   startupFocusPending: Boolean,
+  remoteInput: Boolean = true,
 ): Boolean {
-  return !startupFocusPending && (autoConfirmOnFocus || !destinationVisited)
+  return remoteInput && !startupFocusPending && (autoConfirmOnFocus || !destinationVisited)
 }

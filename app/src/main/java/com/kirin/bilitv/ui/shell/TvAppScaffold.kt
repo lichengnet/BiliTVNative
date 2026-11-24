@@ -1,5 +1,7 @@
 package com.kirin.bilitv.ui.shell
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,11 +23,13 @@ internal fun TvAppScaffold(
   navFocusRequesters: Map<AppDestination, FocusRequester>,
   contentPaddingEnabled: Boolean,
   onAccountSelected: () -> Unit,
+  onExitApp: () -> Unit,
   onDestinationSelected: (AppDestination) -> Unit,
   shouldAutoConfirmDestination: (AppDestination) -> Boolean,
   onMoveRight: (AppDestination) -> Boolean,
   content: @Composable () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   Row(
     modifier = Modifier
       .fillMaxSize()
@@ -39,6 +43,7 @@ internal fun TvAppScaffold(
       accountFocusRequester = accountFocusRequester,
       navFocusRequesters = navFocusRequesters,
       onAccountSelected = onAccountSelected,
+      onExitApp = onExitApp,
       onDestinationSelected = onDestinationSelected,
       shouldAutoConfirmDestination = shouldAutoConfirmDestination,
       onMoveRight = onMoveRight,
@@ -47,7 +52,7 @@ internal fun TvAppScaffold(
       modifier = if (contentPaddingEnabled) {
         Modifier
           .fillMaxSize()
-          .padding(BiliSizing.ContentPadding)
+          .padding(ui.dp(BiliSizing.ContentPadding))
       } else {
         Modifier.fillMaxSize()
       },

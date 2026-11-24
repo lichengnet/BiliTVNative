@@ -1,6 +1,7 @@
 package com.kirin.bilitv.core.image
 
 import android.content.Context
+import com.kirin.bilitv.core.device.DeviceCompatibility
 import com.kirin.bilitv.core.network.BiliHeaders
 import coil.request.CachePolicy
 import coil.request.ImageRequest
@@ -22,14 +23,19 @@ fun buildVideoThumbnailRequest(
   allowRgb565: Boolean = false,
   memoryCacheEnabled: Boolean = true,
 ): ImageRequest {
+  val compatibility = DeviceCompatibility.current
+  val requestWidth = if (compatibility.isJacinto6) widthPx.coerceAtMost(320) else widthPx
+  val requestHeight = if (compatibility.isJacinto6) heightPx.coerceAtMost(180) else heightPx
+  val format = if (compatibility.isJacinto6) BiliImageFormat.Jpeg else BiliImageFormat.Webp
   return ImageRequest.Builder(context)
-    .data(url.biliCdnResizedImageUrl(widthPx, heightPx))
+    .data(url.resizedBiliImageUrl(requestWidth, requestHeight, format))
     .addBiliImageHeaders()
-    .size(widthPx, heightPx)
+    .size(requestWidth, requestHeight)
     .precision(Precision.INEXACT)
-    .allowRgb565(allowRgb565)
+    .allowRgb565(allowRgb565 || compatibility.isJacinto6)
     .memoryCachePolicy(if (memoryCacheEnabled) CachePolicy.ENABLED else CachePolicy.DISABLED)
     .crossfade(false)
+    .withImageDiagnostics("thumbnail", requestWidth, requestHeight)
     .build()
 }
 
@@ -48,32 +54,8 @@ fun buildOwnerAvatarRequest(
     .allowRgb565(allowRgb565)
     .memoryCachePolicy(if (memoryCacheEnabled) CachePolicy.ENABLED else CachePolicy.DISABLED)
     .crossfade(false)
+    .withImageDiagnostics("avatar", sizePx, sizePx)
     .build()
-}
-
-fun String.biliCdnResizedImageUrl(
-  widthPx: Int,
-  heightPx: Int? = null,
-): String {
-  val normalized = normalizedBiliImageUrl()
-  if (normalized.isBlank() || normalized.contains("@")) return normalized
-
-  val suffix = if (heightPx != null) {
-    "@${widthPx}w_${heightPx}h_1c.webp"
-  } else {
-    "@${widthPx}w.webp"
-  }
-  val queryStart = normalized.indexOfAny(charArrayOf('?', '#')).takeIf { it >= 0 } ?: normalized.length
-  return normalized.substring(0, queryStart) + suffix + normalized.substring(queryStart)
-}
-
-private fun String.normalizedBiliImageUrl(): String {
-  val trimmed = trim()
-  return when {
-    trimmed.startsWith("//") -> "https:$trimmed"
-    trimmed.startsWith("http://") -> "https://${trimmed.removePrefix("http://")}"
-    else -> trimmed
-  }
 }
 
 private fun ImageRequest.Builder.addBiliImageHeaders(): ImageRequest.Builder {

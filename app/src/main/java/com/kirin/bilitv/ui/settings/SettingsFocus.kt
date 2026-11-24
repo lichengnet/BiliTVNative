@@ -1,5 +1,7 @@
 package com.kirin.bilitv.ui.settings
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -35,9 +37,10 @@ internal fun SettingsEntryFocusTarget(
   focusRequester: FocusRequester,
   onFocused: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   Box(
     modifier = Modifier
-      .size(BiliSpacing.Xs)
+      .size(ui.dp(BiliSpacing.Xs))
       .focusRequester(focusRequester)
       .onFocusChanged { focusState ->
         if (focusState.isFocused) {
@@ -52,6 +55,7 @@ internal fun Modifier.settingsBoundaryKeys(
   itemIndex: Int,
   onMoveSettingFocus: (Int, Int) -> Boolean,
   onMoveLeftToNav: () -> Boolean,
+  onMoveRightToSections: () -> Boolean,
 ): Modifier {
   return onPreviewKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) {
@@ -61,6 +65,7 @@ internal fun Modifier.settingsBoundaryKeys(
       Key.DirectionUp -> onMoveSettingFocus(itemIndex, -1)
       Key.DirectionDown -> onMoveSettingFocus(itemIndex, 1)
       Key.DirectionLeft -> onMoveLeftToNav()
+      Key.DirectionRight -> onMoveRightToSections()
       else -> false
     }
   }

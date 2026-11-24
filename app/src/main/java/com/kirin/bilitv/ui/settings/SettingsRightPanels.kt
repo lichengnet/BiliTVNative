@@ -1,18 +1,26 @@
 package com.kirin.bilitv.ui.settings
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +29,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -38,6 +50,7 @@ import com.kirin.bilitv.core.model.HomeSection
 import com.kirin.bilitv.core.settings.AppSettings
 import com.kirin.bilitv.ui.focus.BiliFocusableSurface
 import com.kirin.bilitv.ui.glass.biliLiquidGlassSurface
+import com.kirin.bilitv.ui.home.adaptiveGridColumns
 import com.kirin.bilitv.ui.home.titleRes
 import com.kirin.bilitv.ui.login.createQrCodeBitmap
 import com.kirin.bilitv.ui.theme.BiliFocus
@@ -50,42 +63,51 @@ import com.kirin.bilitv.ui.theme.LocalHomeColors
 @Composable
 internal fun SettingsHomeSectionsColumn(
   settings: AppSettings,
+  gridState: LazyGridState,
+  firstItemFocusRequester: FocusRequester,
   onMoveLeftToSettings: () -> Boolean,
   onHomeSectionEnabledChange: (HomeSection, Boolean) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
+  BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+  val columns = adaptiveGridColumns(maxWidth.value, ui.dp(BiliSizing.SettingsSectionPreferredMinWidth).value, ui.dp(BiliSpacing.Md).value)
   Column(
-    modifier = modifier,
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
+    modifier = Modifier.fillMaxSize(),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
   ) {
     Text(
       text = stringResource(R.string.settings_home_sections_section),
       color = homeColors.textSecondary,
-      fontSize = BiliTypography.SectionTitle,
+      fontSize = ui.sp(BiliTypography.SectionTitle),
       fontWeight = FontWeight.Bold,
     )
     Text(
       text = stringResource(R.string.settings_home_sections_description),
       color = homeColors.textSecondary,
-      fontSize = BiliTypography.BodySmall,
+      fontSize = ui.sp(BiliTypography.BodySmall),
     )
     LazyVerticalGrid(
-      columns = GridCells.Fixed(BiliSizing.SettingsHomeSectionColumns),
+      state = gridState,
+      columns = GridCells.Fixed(columns),
       modifier = Modifier
         .fillMaxWidth()
-        .height(BiliSizing.SettingsHomeSectionGridHeight),
-      horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
-      verticalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
-      userScrollEnabled = false,
+        .weight(1f),
+      horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
+      verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
+      userScrollEnabled = true,
     ) {
       itemsIndexed(HomeSection.DefaultOrder, key = { _, section -> section.key }) { index, section ->
         HomeSectionChip(
           title = stringResource(section.titleRes()),
           selected = section in settings.enabledHomeSections,
-          modifier = Modifier.settingsSectionChipBoundaryKeys(
+          modifier = Modifier
+            .testTag("settings_home_section_${section.key}")
+            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+            .settingsSectionChipBoundaryKeys(
             index = index,
-            columns = BiliSizing.SettingsHomeSectionColumns,
+            columns = columns,
             onMoveLeftToSettings = onMoveLeftToSettings,
           ),
           onClick = {
@@ -95,23 +117,21 @@ internal fun SettingsHomeSectionsColumn(
       }
     }
   }
+  }
 }
 
 @Composable
 internal fun SettingsAboutColumn(
+  scrollState: ScrollState,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   val performancePolicy = LocalBiliPerformancePolicy.current
-  val panelShape = RoundedCornerShape(BiliRadius.Panel)
+  val panelShape = RoundedCornerShape(ui.dp(BiliRadius.Panel))
   val projectUrl = SettingsAboutProjectUrl
   val qrBitmap = remember(projectUrl) {
     createQrCodeBitmap(projectUrl, SettingsAboutQrSizePx)
-  }
-  val libraryColumns = remember {
-    SettingsAboutLibraries.chunked(
-      (SettingsAboutLibraries.size + SettingsAboutLibraryColumnCount - 1) / SettingsAboutLibraryColumnCount,
-    )
   }
 
   Box(
@@ -123,34 +143,40 @@ internal fun SettingsAboutColumn(
         shape = panelShape,
         surfaceColor = homeColors.cardSurface,
         borderColor = homeColors.glassBorder,
-        borderWidth = BiliFocus.RestingBorderWidth,
+        borderWidth = ui.dp(BiliFocus.RestingBorderWidth),
       ),
   ) {
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(BiliSpacing.Lg),
-      verticalArrangement = Arrangement.spacedBy(BiliSpacing.Lg),
+        .testTag("settings_about_scroll")
+        .focusProperties { canFocus = false }
+        .verticalScroll(scrollState)
+        .padding(ui.dp(BiliSpacing.Lg)),
+      verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Lg)),
     ) {
       Text(
         text = stringResource(R.string.settings_about_title),
         color = homeColors.textSecondary,
-        fontSize = BiliTypography.SectionTitle,
+        fontSize = ui.sp(BiliTypography.SectionTitle),
         fontWeight = FontWeight.Bold,
       )
+      BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val availableWidth = maxWidth
+        if (maxWidth >= ui.dp(BiliSizing.LoginQrImageSize) * 2) {
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Xl),
+        horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Xl)),
         verticalAlignment = Alignment.Top,
       ) {
         Column(
           modifier = Modifier.weight(1f),
-          verticalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
+          verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
         ) {
           Text(
             text = stringResource(R.string.settings_about_project_name),
             color = homeColors.textPrimary,
-            fontSize = 28.sp,
+            fontSize = ui.sp(BiliTypography.AboutProjectTitle),
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -162,15 +188,15 @@ internal fun SettingsAboutColumn(
         }
         Box(
           modifier = Modifier
-            .width(BiliSizing.LoginQrImageSize),
+            .width(ui.dp(BiliSizing.LoginQrImageSize)),
           contentAlignment = Alignment.TopStart,
         ) {
           Box(
             modifier = Modifier
-              .size(BiliSizing.LoginQrImageSize - BiliSpacing.Md)
-              .clip(RoundedCornerShape(BiliRadius.Card))
+              .size(ui.dp(BiliSizing.LoginQrImageSize) - ui.dp(BiliSpacing.Md))
+              .clip(RoundedCornerShape(ui.dp(BiliRadius.Card)))
               .background(Color.White)
-              .padding(BiliSpacing.Sm),
+              .padding(ui.dp(BiliSpacing.Sm)),
             contentAlignment = Alignment.Center,
           ) {
             Image(
@@ -181,43 +207,90 @@ internal fun SettingsAboutColumn(
           }
         }
       }
-      Row(
+        } else {
+      Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Xl),
-        verticalAlignment = Alignment.Top,
+        verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Xl)),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
+        ) {
+          Text(
+            text = stringResource(R.string.settings_about_project_name),
+            color = homeColors.textPrimary,
+            fontSize = ui.sp(BiliTypography.AboutProjectTitle),
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          AboutTextBlock(
+            title = stringResource(R.string.settings_about_project_intro_title),
+            body = stringResource(R.string.settings_about_project_intro),
+          )
+        }
+        Box(
+          modifier = Modifier
+            .width(ui.dp(BiliSizing.LoginQrImageSize).coerceAtMost(availableWidth)),
+          contentAlignment = Alignment.TopStart,
+        ) {
+          Box(
+            modifier = Modifier
+              .width((ui.dp(BiliSizing.LoginQrImageSize) - ui.dp(BiliSpacing.Md)).coerceAtMost(availableWidth))
+              .aspectRatio(1f)
+              .clip(RoundedCornerShape(ui.dp(BiliRadius.Card)))
+              .background(Color.White)
+              .padding(ui.dp(BiliSpacing.Sm)),
+            contentAlignment = Alignment.Center,
+          ) {
+            Image(
+              bitmap = qrBitmap.asImageBitmap(),
+              contentDescription = stringResource(R.string.settings_about_project_url_qr_content_description),
+              modifier = Modifier.fillMaxSize(),
+            )
+          }
+        }
+      }
+        }
+      }
+      Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Xl)),
       ) {
         AboutTextBlock(
           title = stringResource(R.string.settings_about_project_url_title),
           body = projectUrl,
           bodyMaxLines = 2,
-          modifier = Modifier.weight(1f),
+          modifier = Modifier.fillMaxWidth(),
         )
         AboutTextBlock(
           title = stringResource(R.string.settings_about_license_title),
           body = stringResource(R.string.settings_about_license_value),
           bodyMaxLines = 1,
-          modifier = Modifier.width(BiliSizing.LoginQrImageSize),
+          modifier = Modifier.fillMaxWidth(),
         )
       }
       Text(
         text = stringResource(R.string.settings_about_libraries_title),
         color = homeColors.textPrimary,
-        fontSize = BiliTypography.Body,
+        fontSize = ui.sp(BiliTypography.Body),
         fontWeight = FontWeight.Bold,
       )
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Xl),
-      ) {
+      BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val count = adaptiveGridColumns(maxWidth.value, ui.dp(BiliSizing.AboutLibraryPreferredMinWidth).value,
+          ui.dp(BiliSpacing.Xl).value, SettingsAboutLibraryColumnCount)
+        val libraryColumns = SettingsAboutLibraries.chunked((SettingsAboutLibraries.size + count - 1) / count)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Xl))) {
         libraryColumns.forEach { libraries ->
           Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(BiliSpacing.Sm),
+            verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Sm)),
           ) {
             libraries.forEach { library ->
               AboutLibraryLine(library = library)
             }
           }
+        }
         }
       }
     }
@@ -231,21 +304,22 @@ private fun AboutTextBlock(
   bodyMaxLines: Int = Int.MAX_VALUE,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Column(
     modifier = modifier,
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Xs),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Xs)),
   ) {
     Text(
       text = title,
       color = homeColors.textPrimary,
-      fontSize = BiliTypography.Body,
+      fontSize = ui.sp(BiliTypography.Body),
       fontWeight = FontWeight.Bold,
     )
     Text(
       text = body,
       color = homeColors.textSecondary,
-      fontSize = BiliTypography.BodySmall,
+      fontSize = ui.sp(BiliTypography.BodySmall),
       maxLines = bodyMaxLines,
       overflow = TextOverflow.Ellipsis,
     )
@@ -257,15 +331,16 @@ private fun AboutLibraryLine(
   library: SettingsAboutLibrary,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Column(
     modifier = modifier,
-    verticalArrangement = Arrangement.spacedBy(BiliSpacing.Xs),
+    verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Xs)),
   ) {
     Text(
       text = library.name,
       color = homeColors.textPrimary,
-      fontSize = BiliTypography.BodySmall,
+      fontSize = ui.sp(BiliTypography.BodySmall),
       fontWeight = FontWeight.Bold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
@@ -273,14 +348,14 @@ private fun AboutLibraryLine(
     Text(
       text = stringResource(library.descriptionRes),
       color = homeColors.textSecondary,
-      fontSize = BiliTypography.CardMeta,
+      fontSize = ui.sp(BiliTypography.CardMeta),
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
     Text(
       text = library.url,
       color = homeColors.textTertiary,
-      fontSize = BiliTypography.CardBadge,
+      fontSize = ui.sp(BiliTypography.CardBadge),
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
@@ -294,8 +369,9 @@ private fun HomeSectionChip(
   modifier: Modifier = Modifier,
   onClick: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
-  val chipShape = RoundedCornerShape(BiliRadius.Pill)
+  val chipShape = RoundedCornerShape(ui.dp(BiliRadius.Pill))
   BiliFocusableSurface(
     scaleOnFocus = false,
     shadowOnFocus = false,
@@ -303,11 +379,12 @@ private fun HomeSectionChip(
     onClick = onClick,
     modifier = modifier
       .fillMaxWidth()
-      .height(BiliSizing.SettingsChipHeight),
+      .heightIn(min = ui.dp(BiliSizing.SettingsChipHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget)),
   ) {
     Box(
       modifier = Modifier
-        .fillMaxSize()
+        .fillMaxWidth()
+        .heightIn(min = ui.dp(BiliSizing.SettingsChipHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
         .clip(chipShape)
         .background(
           color = if (selected) {
@@ -316,13 +393,14 @@ private fun HomeSectionChip(
             Color.Transparent
           },
           shape = chipShape,
-        ),
+        )
+        .padding(horizontal = ui.dp(BiliSpacing.Sm), vertical = ui.dp(BiliSpacing.Sm)),
       contentAlignment = Alignment.Center,
     ) {
       Text(
         text = title,
         color = if (selected) homeColors.textPrimary else homeColors.textTertiary,
-        fontSize = BiliTypography.BodySmall,
+        fontSize = ui.sp(BiliTypography.BodySmall),
         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
       )
     }

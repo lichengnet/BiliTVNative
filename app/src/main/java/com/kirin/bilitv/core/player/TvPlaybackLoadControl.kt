@@ -2,19 +2,11 @@ package com.kirin.bilitv.core.player
 
 import androidx.media3.exoplayer.DefaultLoadControl
 
-fun createTvPlaybackLoadControl(): DefaultLoadControl {
+fun createTvPlaybackLoadControl(constrainedDevice: Boolean = false): DefaultLoadControl {
+  val policy = playbackBufferPolicy(constrainedDevice)
   return DefaultLoadControl.Builder()
-    .setBufferDurationsMs(
-      MinBufferMs,
-      MaxBufferMs,
-      BufferForPlaybackMs,
-      BufferForPlaybackAfterRebufferMs,
-    )
-    .setPrioritizeTimeOverSizeThresholds(true)
+    .setBufferDurationsMs(policy.minMs, policy.maxMs, policy.playbackMs, policy.rebufferMs)
+    .setPrioritizeTimeOverSizeThresholds(policy.prioritizeTime)
+    .apply { policy.targetBytes?.let { setTargetBufferBytes(it); setBackBuffer(0, false) } }
     .build()
 }
-
-private const val MinBufferMs = 30_000
-private const val MaxBufferMs = 90_000
-private const val BufferForPlaybackMs = 1_500
-private const val BufferForPlaybackAfterRebufferMs = 4_000

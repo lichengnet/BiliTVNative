@@ -1,6 +1,11 @@
 package com.kirin.bilitv.ui.settings
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,9 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -22,17 +29,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import com.kirin.bilitv.R
+import com.kirin.bilitv.core.device.CompatibilityDiagnostics
+import com.kirin.bilitv.core.settings.AppSettingsStore
+import com.kirin.bilitv.ui.player.PlaybackLogDialog
 import com.kirin.bilitv.core.i18n.ChineseTextVariant
 import com.kirin.bilitv.core.model.HomeSection
 import com.kirin.bilitv.core.player.CodecCapability
 import com.kirin.bilitv.core.player.PlaybackCodecPreference
 import com.kirin.bilitv.core.player.PlaybackQualityPreference
+import com.kirin.bilitv.core.settings.AppUiSize
 import com.kirin.bilitv.core.settings.AppSettings
 import com.kirin.bilitv.core.settings.AppVisualPerformanceMode
 import com.kirin.bilitv.core.settings.HomeThemeVariant
@@ -50,6 +63,7 @@ fun SettingsScreen(
   codecCapability: CodecCapability,
   firstItemFocusRequester: FocusRequester,
   onMoveLeftToNav: () -> Boolean,
+  onUiSizeChange: (AppUiSize) -> Unit,
   onVisualPerformanceModeChange: (AppVisualPerformanceMode) -> Unit,
   liquidGlassCardsSupported: Boolean,
   onLiquidGlassCardsEnabledChange: (Boolean) -> Unit,
@@ -69,15 +83,21 @@ fun SettingsScreen(
   onAutoConfirmOnFocusChange: (Boolean) -> Unit,
   onAutoRefreshOnSwitchChange: (Boolean) -> Unit,
   onHomeSectionEnabledChange: (HomeSection, Boolean) -> Unit,
+  playbackLogSettings: AppSettingsStore? = null,
 ) {
+  val ui = LocalUiMetrics.current
   val settingsListState = rememberLazyListState()
+  val homeSectionGridState = rememberLazyGridState()
+  val firstHomeSectionFocusRequester = remember { FocusRequester() }
   val coroutineScope = rememberCoroutineScope()
   val density = LocalDensity.current
+  val logSettings = playbackLogSettings?.takeIf { CompatibilityDiagnostics.enabled }
+  var showingLog by remember { mutableStateOf(false) }
   val settingsRowFallbackHeightPx = with(density) {
-    (BiliSizing.SettingsRowHeight + BiliSpacing.Md).roundToPx()
+    (ui.dp(BiliSizing.SettingsRowHeight) + ui.dp(BiliSpacing.Md)).roundToPx()
   }
   val settingsScrollInsetPx = with(density) {
-    BiliSpacing.Md.roundToPx()
+    ui.dp(BiliSpacing.Md).roundToPx()
   }
   val settingFocusRequesters = remember {
     mapOf(
@@ -95,15 +115,20 @@ fun SettingsScreen(
       SettingsItemShowMiniProgressBar to FocusRequester(),
       SettingsItemAutoConfirmOnFocus to FocusRequester(),
       SettingsItemAutoRefreshOnSwitch to FocusRequester(),
+      SettingsItemUiSize to FocusRequester(),
       SettingsItemVisualPerformanceMode to FocusRequester(),
       SettingsItemLiquidGlassCards to FocusRequester(),
       SettingsItemHomeThemeVariant to FocusRequester(),
       SettingsItemAbout to FocusRequester(),
+      SettingsItemPlaybackLog to FocusRequester(),
     )
   }
   var lastFocusedSettingItem by remember { mutableIntStateOf(SettingsItemPlaybackQuality) }
   var focusSettingJob by remember { mutableStateOf<Job?>(null) }
+  val aboutScrollState = rememberScrollState()
+  val aboutScrollStepPx = with(density) { ui.dp(BiliSizing.AboutScrollStep).toPx() }
   var rightPanel by remember { mutableStateOf(SettingsRightPanel.HomeSections) }
+  var settingsHasFocus by remember { mutableStateOf(false) }
 
   fun focusSettingItem(itemIndex: Int, direction: Int = 0): Boolean {
     focusSettingJob?.cancel()
@@ -124,10 +149,32 @@ fun SettingsScreen(
     return true
   }
 
+  fun focusHomeSections(): Boolean {
+    // Right enters the companion pane even when narrow windows place it below the settings list.
+    if (rightPanel != SettingsRightPanel.HomeSections) return true
+    focusSettingJob?.cancel()
+    focusSettingJob = coroutineScope.launch {
+      homeSectionGridState.scrollToItem(0)
+      withFrameNanos { }
+      runCatching { firstHomeSectionFocusRequester.requestFocus() }
+    }
+    return true
+  }
+
   fun moveSettingFocus(itemIndex: Int, direction: Int): Boolean {
-    val currentOrderIndex = SettingsFocusableItems.indexOf(itemIndex)
-    val targetItem = SettingsFocusableItems.getOrNull(currentOrderIndex + direction) ?: return true
+    if (itemIndex == SettingsItemAbout && ((direction > 0 && aboutScrollState.canScrollForward) || (direction < 0 && aboutScrollState.value > 0))) {
+      coroutineScope.launch { aboutScrollState.scrollBy(aboutScrollStepPx * direction) }
+      return true
+    }
+    val focusableItems = if (logSettings == null) SettingsFocusableItems else SettingsFocusableItems + SettingsItemPlaybackLog
+    val currentOrderIndex = focusableItems.indexOf(itemIndex)
+    val targetItem = focusableItems.getOrNull(currentOrderIndex + direction) ?: return true
     return focusSettingItem(targetItem, direction)
+  }
+
+  LaunchedEffect(ui.size) {
+    withFrameNanos { }
+    if (settingsHasFocus) focusSettingItem(lastFocusedSettingItem)
   }
 
   Box(
@@ -139,11 +186,10 @@ fun SettingsScreen(
         focusSettingItem(lastFocusedSettingItem)
       },
     )
-    Row(
+    SettingsPanelsLayout(
       modifier = Modifier
         .fillMaxSize()
-        .padding(top = BiliSpacing.Md),
-      horizontalArrangement = Arrangement.spacedBy(BiliSpacing.Xl),
+        .padding(top = ui.dp(BiliSpacing.Md)),
     ) {
       SettingsBehaviorColumn(
         settings = settings,
@@ -160,7 +206,9 @@ fun SettingsScreen(
           }
         },
         onMoveSettingFocus = ::moveSettingFocus,
+        onMoveRightToSections = ::focusHomeSections,
         onMoveLeftToNav = onMoveLeftToNav,
+        onUiSizeChange = onUiSizeChange,
         onVisualPerformanceModeChange = onVisualPerformanceModeChange,
         liquidGlassCardsSupported = liquidGlassCardsSupported,
         onLiquidGlassCardsEnabledChange = onLiquidGlassCardsEnabledChange,
@@ -182,20 +230,32 @@ fun SettingsScreen(
         onAboutSelected = {
           rightPanel = SettingsRightPanel.About
         },
-        modifier = Modifier.weight(1f),
+        onPlaybackLogSelected = logSettings?.let { { showingLog = true } },
+        modifier = Modifier.fillMaxSize()
+          .onFocusChanged { settingsHasFocus = it.hasFocus }
+          .focusGroup(),
       )
       when (rightPanel) {
         SettingsRightPanel.HomeSections -> SettingsHomeSectionsColumn(
           settings = settings,
+          gridState = homeSectionGridState,
+          firstItemFocusRequester = firstHomeSectionFocusRequester,
           onMoveLeftToSettings = { focusSettingItem(lastFocusedSettingItem) },
           onHomeSectionEnabledChange = onHomeSectionEnabledChange,
-          modifier = Modifier.weight(1f),
+          modifier = Modifier.fillMaxSize(),
         )
         SettingsRightPanel.About -> SettingsAboutColumn(
-          modifier = Modifier.weight(1f),
+          scrollState = aboutScrollState,
+          modifier = Modifier.fillMaxSize(),
         )
       }
     }
+  }
+  if (showingLog && logSettings != null) {
+    PlaybackLogDialog(logSettings, onDismiss = {
+      showingLog = false
+      focusSettingItem(SettingsItemPlaybackLog)
+    })
   }
 }
 
@@ -209,7 +269,9 @@ private fun SettingsBehaviorColumn(
   focusRequesters: Map<Int, FocusRequester>,
   onSettingFocused: (Int) -> Unit,
   onMoveSettingFocus: (Int, Int) -> Boolean,
+  onMoveRightToSections: () -> Boolean,
   onMoveLeftToNav: () -> Boolean,
+  onUiSizeChange: (AppUiSize) -> Unit,
   onVisualPerformanceModeChange: (AppVisualPerformanceMode) -> Unit,
   liquidGlassCardsSupported: Boolean,
   onLiquidGlassCardsEnabledChange: (Boolean) -> Unit,
@@ -229,14 +291,16 @@ private fun SettingsBehaviorColumn(
   onAutoConfirmOnFocusChange: (Boolean) -> Unit,
   onAutoRefreshOnSwitchChange: (Boolean) -> Unit,
   onAboutSelected: () -> Unit,
+  onPlaybackLogSelected: (() -> Unit)?,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   CompositionLocalProvider(LocalBringIntoViewSpec provides SettingsBringIntoViewSpec) {
     LazyColumn(
       state = listState,
-      modifier = modifier.fillMaxSize(),
-      contentPadding = PaddingValues(bottom = BiliSpacing.Xxl),
-      verticalArrangement = Arrangement.spacedBy(BiliSpacing.Md),
+      modifier = modifier.fillMaxSize().testTag("settings_behavior_list"),
+      contentPadding = PaddingValues(bottom = ui.dp(BiliSpacing.Xxl)),
+      verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSpacing.Md)),
     ) {
       item(key = "playback-header") {
         SettingsSectionTitle(text = stringResource(R.string.settings_playback_section))
@@ -253,6 +317,7 @@ private fun SettingsBehaviorColumn(
             .settingsBoundaryKeys(
               itemIndex = SettingsItemPlaybackQuality,
               onMoveSettingFocus = onMoveSettingFocus,
+              onMoveRightToSections = onMoveRightToSections,
               onMoveLeftToNav = onMoveLeftToNav,
             ),
           onFocused = { onSettingFocused(SettingsItemPlaybackQuality) },
@@ -281,6 +346,7 @@ private fun SettingsBehaviorColumn(
             .settingsBoundaryKeys(
               itemIndex = SettingsItemPlaybackCodec,
               onMoveSettingFocus = onMoveSettingFocus,
+              onMoveRightToSections = onMoveRightToSections,
               onMoveLeftToNav = onMoveLeftToNav,
             ),
           onFocused = { onSettingFocused(SettingsItemPlaybackCodec) },
@@ -300,6 +366,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemSeekPreviewSprites,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemSeekPreviewSprites) },
@@ -316,6 +383,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAirJumpAssistant,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAirJumpAssistant) },
@@ -332,6 +400,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemConfirmPlaybackExit,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemConfirmPlaybackExit) },
@@ -348,6 +417,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAutoPlayNextEpisode,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAutoPlayNextEpisode) },
@@ -364,6 +434,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAutoPlayRelatedVideo,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAutoPlayRelatedVideo) },
@@ -380,6 +451,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAutoReturnHomeOnCompletion,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAutoReturnHomeOnCompletion) },
@@ -396,6 +468,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemShowClock,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemShowClock) },
@@ -412,6 +485,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemShowMiniProgressBar,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemShowMiniProgressBar) },
@@ -421,7 +495,17 @@ private fun SettingsBehaviorColumn(
     item(key = "ui-header") {
       SettingsSectionTitle(
         text = stringResource(R.string.settings_interaction_section),
-        modifier = Modifier.padding(top = BiliSpacing.Lg),
+        modifier = Modifier.padding(top = ui.dp(BiliSpacing.Lg)),
+      )
+    }
+    item(key = "ui-size") {
+      UiSizeSettingsRow(
+        size = settings.uiSize,
+        onUiSizeChange = onUiSizeChange,
+        modifier = Modifier.focusRequester(focusRequesters.getValue(SettingsItemUiSize))
+          .settingsBoundaryKeys(SettingsItemUiSize, onMoveSettingFocus, onMoveLeftToNav, onMoveRightToSections)
+          .testTag("settings_ui_size"),
+        onFocused = { onSettingFocused(SettingsItemUiSize) },
       )
     }
     item(key = "visual-performance-mode") {
@@ -436,6 +520,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemVisualPerformanceMode,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
         ),
         onFocused = { onSettingFocused(SettingsItemVisualPerformanceMode) },
@@ -461,6 +546,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemLiquidGlassCards,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemLiquidGlassCards) },
@@ -479,6 +565,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemHomeThemeVariant,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemHomeThemeVariant) },
@@ -498,6 +585,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAutoConfirmOnFocus,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAutoConfirmOnFocus) },
@@ -515,6 +603,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAutoRefreshOnSwitch,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAutoRefreshOnSwitch) },
@@ -524,7 +613,7 @@ private fun SettingsBehaviorColumn(
     item(key = "system-header") {
       SettingsSectionTitle(
         text = stringResource(R.string.settings_performance_section),
-        modifier = Modifier.padding(top = BiliSpacing.Lg),
+        modifier = Modifier.padding(top = ui.dp(BiliSpacing.Lg)),
       )
     }
     item(key = "clear-cache") {
@@ -537,6 +626,7 @@ private fun SettingsBehaviorColumn(
           .settingsBoundaryKeys(
             itemIndex = SettingsItemClearCache,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemClearCache) },
@@ -551,10 +641,12 @@ private fun SettingsBehaviorColumn(
         description = stringResource(R.string.settings_language_description),
         value = effectiveVariant.languageLabel(),
         modifier = Modifier
+          .testTag("settings_language")
           .focusRequester(focusRequesters.getValue(SettingsItemChineseTextVariant))
           .settingsBoundaryKeys(
             itemIndex = SettingsItemChineseTextVariant,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemChineseTextVariant) },
@@ -570,15 +662,31 @@ private fun SettingsBehaviorColumn(
         description = stringResource(R.string.settings_about_description),
         value = "",
         modifier = Modifier
+          .testTag("settings_about")
           .focusRequester(focusRequesters.getValue(SettingsItemAbout))
           .settingsBoundaryKeys(
             itemIndex = SettingsItemAbout,
             onMoveSettingFocus = onMoveSettingFocus,
+            onMoveRightToSections = onMoveRightToSections,
             onMoveLeftToNav = onMoveLeftToNav,
           ),
         onFocused = { onSettingFocused(SettingsItemAbout) },
         onClick = onAboutSelected,
       )
+    }
+    if (onPlaybackLogSelected != null) {
+      item(key = "playback-log") {
+        SettingsActionRow(
+          title = stringResource(R.string.playback_log_title),
+          description = stringResource(R.string.playback_log_description),
+          value = "",
+          modifier = Modifier.testTag("settings_playback_log")
+            .focusRequester(focusRequesters.getValue(SettingsItemPlaybackLog))
+            .settingsBoundaryKeys(SettingsItemPlaybackLog, onMoveSettingFocus, onMoveLeftToNav, onMoveRightToSections),
+          onFocused = { onSettingFocused(SettingsItemPlaybackLog) },
+          onClick = onPlaybackLogSelected,
+        )
+      }
     }
   }
   }
@@ -589,11 +697,12 @@ private fun SettingsSectionTitle(
   text: String,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   Text(
     text = text,
     color = homeColors.textSecondary,
-    fontSize = BiliTypography.SectionTitle,
+    fontSize = ui.sp(BiliTypography.SectionTitle),
     fontWeight = FontWeight.Bold,
     modifier = modifier,
   )
@@ -610,14 +719,16 @@ private const val SettingsItemAutoPlayRelatedVideo = 7
 private const val SettingsItemAutoReturnHomeOnCompletion = 8
 private const val SettingsItemShowClock = 9
 private const val SettingsItemShowMiniProgressBar = 10
-private const val SettingsItemVisualPerformanceMode = 12
-private const val SettingsItemLiquidGlassCards = 13
-private const val SettingsItemHomeThemeVariant = 14
-private const val SettingsItemAutoConfirmOnFocus = 15
-private const val SettingsItemAutoRefreshOnSwitch = 16
-private const val SettingsItemClearCache = 18
-private const val SettingsItemChineseTextVariant = 19
-private const val SettingsItemAbout = 20
+private const val SettingsItemUiSize = 12
+private const val SettingsItemVisualPerformanceMode = 13
+private const val SettingsItemLiquidGlassCards = 14
+private const val SettingsItemHomeThemeVariant = 15
+private const val SettingsItemAutoConfirmOnFocus = 16
+private const val SettingsItemAutoRefreshOnSwitch = 17
+private const val SettingsItemClearCache = 19
+private const val SettingsItemChineseTextVariant = 20
+private const val SettingsItemAbout = 21
+private const val SettingsItemPlaybackLog = 22
 
 private val SettingsFocusableItems = listOf(
   SettingsItemPlaybackQuality,
@@ -630,6 +741,7 @@ private val SettingsFocusableItems = listOf(
   SettingsItemAutoReturnHomeOnCompletion,
   SettingsItemShowClock,
   SettingsItemShowMiniProgressBar,
+  SettingsItemUiSize,
   SettingsItemVisualPerformanceMode,
   SettingsItemLiquidGlassCards,
   SettingsItemHomeThemeVariant,

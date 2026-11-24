@@ -1,6 +1,10 @@
 package com.kirin.bilitv.core.player
 
-import android.util.Log
+import android.content.Context
+import com.kirin.bilitv.core.device.DeviceCompatibility
+import com.kirin.bilitv.core.device.PlaybackLogLevel
+import com.kirin.bilitv.core.device.SessionDiagnostics
+import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.auth.WbiKeyRepository
 import com.kirin.bilitv.core.auth.WbiSigner
 import com.kirin.bilitv.core.network.BiliApiClient
@@ -28,6 +32,7 @@ class PlaybackRepository(
   private val sessionStore: SessionStore,
   private val codecCapabilityProbe: CodecCapabilityProbe,
   private val progressStore: PlaybackProgressStore,
+  private val playbackContext: Context? = null,
 ) {
   private val videoshotRepository = VideoshotRepository(
     apiClient = apiClient,
@@ -43,16 +48,19 @@ class PlaybackRepository(
   )
   private val airJumpRepository = AirJumpRepository(apiClient)
 
-  suspend fun getPlaybackInfo(
+  internal suspend fun getPlaybackInfo(
     request: PlaybackRequest,
     codecPreference: PlaybackCodecPreference,
     qualityPreference: PlaybackQualityPreference,
+    attemptLimit: PlaybackAttemptLimit? = null,
+    allowLevelTrial: Boolean = false,
+    trace: PlaybackTrace? = null,
   ): PlaybackInfo {
     val sessData = sessionStore.sessData.first()
     val biliJct = sessionStore.biliJct.first()
     val codecCapability = codecCapabilityProbe.probe()
     val effectiveCodecPreference = when {
-      codecPreference == PlaybackCodecPreference.H264 -> PlaybackCodecPreference.H264
+      DeviceCompatibility.current.isJacinto6 || codecPreference == PlaybackCodecPreference.H264 -> PlaybackCodecPreference.H264
       codecCapability.supports(codecPreference) -> codecPreference
       else -> PlaybackCodecPreference.Auto
     }
@@ -61,10 +69,9 @@ class PlaybackRepository(
       codecCapability = codecCapability,
     )
     val requestedQualityId = request.preferredQualityId ?: qualityPreference.requestedQualityId
-    Log.i(
-      PlaybackLogTag,
-      "playurl codec requested=${codecPreference.key} effective=${effectiveCodecPreference.key} fnval=$fnval qn=$requestedQualityId",
-    )
+    trace?.event(SessionEvent.PLAY_ATTEMPT, "PLAYURL", mapOf(
+      "requestedQn" to requestedQualityId.toString(), "codec" to effectiveCodecPreference.key,
+    ))
     val params = mutableMapOf(
       "bvid" to request.bvid,
       "cid" to request.cid.toString(),
@@ -93,6 +100,9 @@ class PlaybackRepository(
       requestedQualityId = requestedQualityId,
       codecPreference = effectiveCodecPreference,
       codecCapability = codecCapability,
+      attemptLimit = attemptLimit,
+      allowLevelTrial = allowLevelTrial,
+      trace = trace,
     )
   }
 
@@ -253,35 +263,72 @@ class PlaybackRepository(
     requestedQualityId: Int,
     codecPreference: PlaybackCodecPreference,
     codecCapability: CodecCapability,
+    attemptLimit: PlaybackAttemptLimit?,
+    allowLevelTrial: Boolean,
+    trace: PlaybackTrace?,
   ): PlaybackInfo {
     val dash = data.obj("dash")
-    val videoTracks = (dash?.get("video") as? JsonArray)
+    val rawVideo = dash?.get("video") as? JsonArray
+    val rawAudio = dash?.get("audio") as? JsonArray
+    val videoTracks = rawVideo
       ?.mapNotNull { it.asObjectOrNull()?.toPlaybackTrack() }
       .orEmpty()
       .filter { track -> track.baseUrl.isNotBlank() }
-    val audioTracks = (dash?.get("audio") as? JsonArray)
+    val audioTracks = rawAudio
       ?.mapNotNull { it.asObjectOrNull()?.toPlaybackTrack() }
       .orEmpty()
       .filter { track -> track.baseUrl.isNotBlank() }
     val qualities = parseQualities(data)
-    val selectedQuality = qualities.firstOrNull { quality -> quality.id == data.int("quality") }
+    val serverQuality = data.int("quality")
+    val returnedQuality = qualities.firstOrNull { quality -> quality.id == serverQuality }
       ?: qualities.firstOrNull()
-      ?: PlaybackQuality(id = data.int("quality"), description = data.int("quality").toString())
-    val acceptedVideoTracks = videoTracks.filter { track ->
-      track.isPlayable(codecPreference = codecPreference, capability = codecCapability)
-    }.ifEmpty {
-      videoTracks.filter { track -> track.isPlayable(codecPreference = PlaybackCodecPreference.Auto, capability = codecCapability) }
-    }.ifEmpty {
-      videoTracks
+      ?: PlaybackQuality(id = serverQuality, description = serverQuality.toString())
+    val avcSelection = if (DeviceCompatibility.current.isJacinto6) {
+      val requestLimit = attemptLimit ?: PlaybackAttemptLimit.RecoveryTiers.firstOrNull { it.qualityId == requestedQualityId }
+      val ceiling = minOf(serverQuality.takeIf { it > 0 } ?: requestedQualityId, requestedQualityId)
+      selectBoundedHardwareAvcTracks(videoTracks, ceiling, requestLimit, allowLevelTrial && audioTracks.isNotEmpty()) { track ->
+        playbackContext?.let { HardwareAvcDecoders.assess(it, track) }
+          ?: AvcTrackAssessment(AvcTrackDecision.CapabilityUnknown)
+      }
+    } else {
+      null
     }
-    val selectedQualityTracks = acceptedVideoTracks.filter { track -> track.id == selectedQuality.id }
-      .ifEmpty { acceptedVideoTracks }
-      .sortedWith(videoTrackComparator(codecPreference))
-    Log.i(
-      PlaybackLogTag,
-      "playurl qn requested=$requestedQualityId returned=${selectedQuality.id} tracks=" +
-        selectedQualityTracks.joinToString { track -> "${track.id}:${track.width}x${track.height}:${track.codecLabel()}" },
-    )
+    val selectedQualityTracks = avcSelection?.tracks ?: run {
+      val acceptedVideoTracks = selectPlayableVideoTracks(videoTracks, codecPreference, codecCapability)
+      val actualId = acceptedVideoTracks.filter { it.id <= returnedQuality.id }.maxOfOrNull { it.id }
+      acceptedVideoTracks.filter { it.id == actualId }.sortedWith(videoTrackComparator(codecPreference))
+    }
+    val actualId = selectedQualityTracks.firstOrNull()?.id ?: returnedQuality.id
+    val selectedQuality = qualities.firstOrNull { it.id == actualId } ?: PlaybackQuality(actualId, actualId.toString())
+    val selectionMode = avcSelection?.mode ?: PlaybackVideoSelectionMode.Normal
+    if (trace != null) {
+      val best = selectedQualityTracks.firstOrNull()
+      val reason = when {
+        audioTracks.isEmpty() -> "NO_AUDIO"
+        best != null -> selectionMode.name
+        rawVideo.isNullOrEmpty() -> "NO_VIDEO"
+        videoTracks.isEmpty() -> "NO_VIDEO_URL"
+        avcSelection != null -> avcSelection.evaluations.map { it.assessment.decision.name }.distinct().joinToString("-")
+        else -> "NO_COMPATIBLE_VIDEO"
+      }
+      trace.event(SessionEvent.PLAY_TRACKS, "SELECTION", mapOf(
+        "requestedQn" to requestedQualityId.toString(), "returnedQn" to serverQuality.toString(),
+        "selectedQn" to (best?.id ?: 0).toString(), "rawVideo" to (rawVideo?.size ?: 0).toString(),
+        "usableVideo" to videoTracks.size.toString(), "avc" to videoTracks.count(PlaybackTrack::isH264).toString(),
+        "rawAudio" to (rawAudio?.size ?: 0).toString(), "usableAudio" to audioTracks.size.toString(),
+        "retainedVideo" to selectedQualityTracks.size.toString(), "reason" to reason,
+      ) + best?.diagnosticFields().orEmpty(), level = if (best == null || audioTracks.isEmpty()) PlaybackLogLevel.Error else PlaybackLogLevel.Info)
+      if (SessionDiagnostics.captures(PlaybackLogLevel.Debug)) {
+        avcSelection?.evaluations?.forEach { (track, assessment) ->
+          trace.event(SessionEvent.PLAY_TRACKS, "CANDIDATE", track.diagnosticFields() + buildMap {
+            put("quality", track.id.toString())
+            put("result", assessment.decision.name)
+            assessment.decoder?.let { put("decoder", it) }
+            assessment.advertisedLevel?.let { put("levelLimit", it.toString()) }
+          }, PlaybackLogLevel.Debug)
+        }
+      }
+    }
 
     return PlaybackInfo(
       bvid = request.bvid,
@@ -293,8 +340,12 @@ class PlaybackRepository(
       videoTracks = selectedQualityTracks,
       audioTracks = audioTracks.sortedByDescending(PlaybackTrack::bandwidth),
       headers = headers,
+      videoSelectionMode = selectionMode,
     )
   }
+
+  private fun PlaybackTrack.diagnosticFields(): Map<String, String> =
+    playbackFormatFields(codecs, width, height, PlaybackFrameRate.parse(frameRate)?.fps)
 
   private fun JsonObject.toPlaybackTrack(): PlaybackTrack {
     return PlaybackTrack(
@@ -307,6 +358,7 @@ class PlaybackRepository(
       codecs = string("codecs"),
       width = int("width"),
       height = int("height"),
+      frameRate = PlaybackFrameRate.parse(string("frameRate").ifBlank { string("frame_rate") })?.dashValue,
       mimeType = string("mimeType").ifBlank { string("mime_type") },
       segmentBase = PlaybackSegmentBase(
         initializationRange = obj("SegmentBase")?.rangeString("Initialization")
@@ -345,24 +397,6 @@ class PlaybackRepository(
     return (this as? JsonPrimitive)?.contentOrNull ?: toString().trim('"')
   }
 
-  private fun PlaybackTrack.isPlayable(
-    codecPreference: PlaybackCodecPreference,
-    capability: CodecCapability,
-  ): Boolean {
-    when (codecPreference) {
-      PlaybackCodecPreference.H264 -> return isH264
-      PlaybackCodecPreference.H265 -> return isH265
-      PlaybackCodecPreference.Av1 -> return isAv1
-      PlaybackCodecPreference.Auto -> Unit
-    }
-    return when {
-      isAv1 -> capability.supportsAv1
-      isH265 -> capability.supportsH265
-      isH264 -> capability.supportsH264
-      else -> true
-    }
-  }
-
   private fun videoTrackComparator(codecPreference: PlaybackCodecPreference): Comparator<PlaybackTrack> {
     return compareByDescending<PlaybackTrack> { track ->
       track.codecPriority(codecPreference)
@@ -387,15 +421,6 @@ class PlaybackRepository(
     }
   }
 
-  private fun PlaybackTrack.codecLabel(): String {
-    return when {
-      isAv1 -> "AV1"
-      isH265 -> "H.265"
-      isH264 -> "H.264"
-      else -> codecs
-    }
-  }
-
   private fun buildFnval(codecPreference: PlaybackCodecPreference, codecCapability: CodecCapability): Int {
     var fnval = FnvalDash
     if (codecPreference != PlaybackCodecPreference.H264 && codecCapability.supportsH265) {
@@ -413,6 +438,5 @@ class PlaybackRepository(
     const val FnvalDash = 16
     const val FnvalH265 = 64
     const val FnvalAv1 = 1024
-    const val PlaybackLogTag = "BiliTVNative:Playback"
   }
 }

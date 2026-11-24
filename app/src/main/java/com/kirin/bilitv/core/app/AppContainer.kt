@@ -58,6 +58,7 @@ class AppContainer(context: Context) {
     sessionStore = sessionStore,
     codecCapabilityProbe = codecCapabilityProbe,
     progressStore = PlaybackProgressStore(appContext),
+    playbackContext = appContext,
   )
   val danmakuSettingsStore: DanmakuSettingsStore = DanmakuSettingsStore(appContext)
   val tvLoginSigner: TvLoginSigner = TvLoginSigner()

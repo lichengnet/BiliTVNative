@@ -1,8 +1,5 @@
 package com.kirin.bilitv.ui.shell
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import android.os.Build
 import android.os.SystemClock
 import android.widget.Toast
@@ -39,6 +36,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
@@ -51,6 +53,9 @@ import coil.compose.AsyncImage
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.imageLoader
 import com.kirin.bilitv.R
+import com.kirin.bilitv.core.device.DeviceCompatibility
+import com.kirin.bilitv.core.device.SessionDiagnostics
+import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.auth.AuthRepository
 import com.kirin.bilitv.core.cache.AppCacheManager
 import com.kirin.bilitv.core.image.buildVideoThumbnailRequest
@@ -98,6 +103,8 @@ import com.kirin.bilitv.ui.theme.BiliColors
 import com.kirin.bilitv.ui.theme.BiliFocus
 import com.kirin.bilitv.ui.theme.BiliMotion
 import com.kirin.bilitv.ui.theme.BiliSizing
+import com.kirin.bilitv.ui.theme.UiSizeScope
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
 import com.kirin.bilitv.ui.theme.BiliSpacing
 import com.kirin.bilitv.ui.theme.BiliTypography
 import com.kirin.bilitv.ui.theme.HomeColorScheme
@@ -153,6 +160,7 @@ fun BiliTvApp(
   appCacheManager: AppCacheManager,
   searchHistoryStore: SearchHistoryStore,
   sessionStore: SessionStore,
+  onExitApp: () -> Unit,
 ) {
   val settings by appSettingsStore.settings.collectAsState(initial = AppSettings())
   val context = LocalContext.current
@@ -278,6 +286,7 @@ fun BiliTvApp(
   }
 
   fun selectDestination(destination: AppDestination) {
+    startupShellFocusPending = false
     if (selectedDestination == AppDestination.Search && destination != AppDestination.Search) {
       searchViewModel.clear()
       searchFocusState.clear()
@@ -370,6 +379,7 @@ fun BiliTvApp(
     LocalHomeColors provides homeColors,
     LocalLiquidGlassBackdrop provides activeLiquidGlassBackdrop,
   ) {
+    val playbackMotionEnabled = performancePolicy.motionEnabled && DeviceCompatibility.current.playbackTransitionsEnabled
     val activePlaybackRequest = playbackRequest
     var visiblePlaybackRequest by remember { mutableStateOf(activePlaybackRequest) }
     var playbackSharedKey by remember { mutableStateOf<String?>(null) }
@@ -403,7 +413,7 @@ fun BiliTvApp(
           return@LaunchedEffect
         }
       }
-      startupShellFocusPending = false
+      // Keep suppression after unsuccessful startup focus; explicit navigation clears it.
     }
 
     LaunchedEffect(activePlaybackRequest, shellFocusState.pendingContentFocusDestination, selectedDestination, accountSelected) {
@@ -456,7 +466,7 @@ fun BiliTvApp(
       }
       playbackFocusOrigin?.let(navigationViewModel::rememberPlaybackFocusOrigin)
       val sharedTransitionEnabled = PlaybackTransitionPolicy.shouldAnimateEntry(
-        motionEnabled = performancePolicy.motionEnabled,
+        motionEnabled = playbackMotionEnabled,
         thumbnailAvailable = video.pic.isNotBlank(),
       )
       playbackSessionViewModel.startOrUpdate(request)
@@ -515,7 +525,7 @@ fun BiliTvApp(
         playbackFocusOrigin?.destination ?: selectedDestination,
       )
       val sharedTransitionEnabled = PlaybackTransitionPolicy.shouldAnimateExit(
-        motionEnabled = performancePolicy.motionEnabled,
+        motionEnabled = playbackMotionEnabled,
         sharedKeyAvailable = playbackSharedKey != null,
         exitFrameAvailable = playbackExitFrame != null,
       )
@@ -562,7 +572,7 @@ fun BiliTvApp(
         transitionSpec = {
           if (
             PlaybackTransitionPolicy.shouldRetainOutgoingContent(
-              motionEnabled = performancePolicy.motionEnabled,
+              motionEnabled = playbackMotionEnabled,
               sharedTransitionActive = playbackSharedTransitionActive,
             )
           ) {
@@ -580,7 +590,11 @@ fun BiliTvApp(
       ) { displayedPlaybackRequest ->
         PlaybackSharedAnimatedScope(animatedVisibilityScope = this) {
       if (displayedPlaybackRequest == null) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        UiSizeScope(settings.uiSize) {
+        Box(modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+          if (tvInteractionEnabled && event.type == KeyEventType.KeyDown && event.key in listOf(Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight)) startupShellFocusPending = false
+          false
+        }) {
         Box(
           modifier = Modifier
             .fillMaxSize()
@@ -600,9 +614,10 @@ fun BiliTvApp(
         }
     BackHandler(enabled = activePlaybackRequest == null && !playbackSharedTransitionActive) {
           val now = SystemClock.elapsedRealtime()
-          if (now - lastAppExitBackPressMs <= ExitConfirmWindowMs) {
+          if (lastAppExitBackPressMs > 0L && now - lastAppExitBackPressMs <= ExitConfirmWindowMs) {
             cancelAppExitConfirmToast()
-            context.findActivity()?.finish()
+            SessionDiagnostics.event(SessionEvent.EXIT_REQUESTED, mapOf("source" to "DOUBLE_BACK"))
+            onExitApp()
           } else {
             lastAppExitBackPressMs = now
             showAppExitConfirmToast()
@@ -616,6 +631,10 @@ fun BiliTvApp(
 	          accountFocusRequester = shellFocusState.accountFocusRequester,
 	          navFocusRequesters = shellFocusState.navFocusRequesters,
 	          contentPaddingEnabled = accountSelected || selectedDestination != AppDestination.Search,
+	          onExitApp = {
+            SessionDiagnostics.event(SessionEvent.EXIT_REQUESTED, mapOf("source" to "NAV_BUTTON"))
+            onExitApp()
+          },
 	          onAccountSelected = {
 	            navigationViewModel.selectAccount()
 	          },
@@ -627,6 +646,7 @@ fun BiliTvApp(
 	              autoConfirmOnFocus = autoConfirmOnFocus,
 	              destinationVisited = destination in visitedDestinations,
 	              startupFocusPending = startupShellFocusPending,
+                  remoteInput = tvInteractionEnabled,
 	            )
 	          },
 	          onMoveRight = { destination ->
@@ -707,11 +727,15 @@ fun BiliTvApp(
                   },
                 )
                 AppDestination.Settings -> SettingsScreen(
+                  playbackLogSettings = appSettingsStore,
                   settings = settings,
                   cacheSizeText = cacheSizeBytes?.let(::formatCacheSize) ?: stringResource(R.string.settings_clear_cache_calculating),
                   codecCapability = codecCapability,
                   firstItemFocusRequester = shellFocusState.settingsFocusRequester,
                   onMoveLeftToNav = ::requestSidebarFocus,
+                  onUiSizeChange = { size ->
+                    coroutineScope.launch { appSettingsStore.setUiSize(size) }
+                  },
                   onVisualPerformanceModeChange = { mode ->
                     coroutineScope.launch {
                       appSettingsStore.setVisualPerformanceMode(mode)
@@ -821,6 +845,7 @@ fun BiliTvApp(
           )
         }
       }
+        }
       } else {
         val playerContainerBackground = if (playerContentVisible) {
           BiliColors.VideoBlack
@@ -834,6 +859,7 @@ fun BiliTvApp(
         ) {
           if (playerContentVisible) {
             PlayerScreen(
+              playbackLogSettings = appSettingsStore,
               request = displayedPlaybackRequest,
               videoRepository = videoRepository,
               playbackRepository = playbackRepository,
@@ -849,7 +875,7 @@ fun BiliTvApp(
               autoReturnHomeOnCompletion = settings.autoReturnHomeOnCompletion,
               showClock = settings.showClock,
               showMiniProgressBar = settings.showMiniProgressBar,
-              captureExitFrame = performancePolicy.motionEnabled && playbackSharedKey != null,
+              captureExitFrame = playbackMotionEnabled && playbackSharedKey != null,
               onExitFrameReady = { frame ->
                 playbackExitFrame = frame
               },
@@ -928,14 +954,6 @@ private fun PlaybackSharedCoverTarget(
     Box(
       modifier = sharedModifier.background(BiliColors.VideoBlack),
     )
-  }
-}
-
-private tailrec fun Context.findActivity(): Activity? {
-  return when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
   }
 }
 
@@ -1058,6 +1076,7 @@ private fun ComingSoonScreen(
   @StringRes titleRes: Int,
   @StringRes messageRes: Int,
 ) {
+  val ui = LocalUiMetrics.current
   Column(
     modifier = Modifier.fillMaxSize(),
     verticalArrangement = Arrangement.Center,
@@ -1065,14 +1084,14 @@ private fun ComingSoonScreen(
     Text(
       text = stringResource(titleRes),
       color = BiliColors.TextPrimary,
-      fontSize = BiliTypography.ScreenTitle,
+      fontSize = ui.sp(BiliTypography.ScreenTitle),
       fontWeight = FontWeight.Bold,
     )
     Text(
       text = stringResource(messageRes),
       color = BiliColors.TextSecondary,
-      fontSize = BiliTypography.Body,
-      modifier = Modifier.padding(top = BiliSpacing.Md),
+      fontSize = ui.sp(BiliTypography.Body),
+      modifier = Modifier.padding(top = ui.dp(BiliSpacing.Md)),
     )
   }
 }

@@ -1,5 +1,8 @@
 package com.kirin.bilitv.ui.home
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+import com.kirin.bilitv.ui.theme.uiDp
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -31,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -63,24 +67,32 @@ private const val TouchLoadMoreRowThreshold = 2
 @Composable
 internal fun TouchVideoGrid(
   videos: List<VideoSummary>,
+  restoredFocusIndex: Int,
+  restoreFocusRequestKey: Int,
+  onRestoreFocusHandled: (Int) -> Unit,
   onFocusedIndexChange: (Int, VideoSummary) -> Unit,
   onLoadMore: () -> Unit,
   onRefresh: (() -> Unit)?,
   onVideoSelected: (VideoSummary) -> Unit,
   modifier: Modifier = Modifier,
   cardMode: VideoCardMode = VideoCardMode.Standard,
-  horizontalPadding: Dp = BiliSizing.VideoGridHorizontalPadding,
-  topPadding: Dp = BiliFocus.ScrollInset,
+  horizontalPadding: Dp = uiDp(BiliSizing.VideoGridHorizontalPadding),
+  topPadding: Dp = uiDp(BiliFocus.ScrollInset),
   topBleed: Dp = 0.dp,
   keyFactory: (Int, VideoSummary) -> Any = { _, video -> video.bvid },
+  layoutSpec: VideoGridLayoutSpec,
 ) {
-  val listState = rememberLazyListState()
+  val ui = LocalUiMetrics.current
+  val spec = layoutSpec
+  val initialIndex = restoredFocusIndex.coerceIn(0, videos.lastIndex.coerceAtLeast(0))
+  val listState = rememberLazyListState(initialFirstVisibleItemIndex = spec.rowForIndex(initialIndex))
+  val requestedRestoreIndex = remember(restoreFocusRequestKey) { restoredFocusIndex }
   val density = LocalDensity.current
   val onLoadMoreState = rememberUpdatedState(onLoadMore)
   val onRefreshState = rememberUpdatedState(onRefresh)
-  val touchPullRefreshTriggerPx = with(density) { BiliSizing.TouchPullRefreshTriggerDistance.toPx() }
-  val touchPullRefreshMaxPx = with(density) { BiliSizing.TouchPullRefreshMaxDistance.toPx() }
-  val touchPullRefreshContentTravelPx = with(density) { BiliSizing.TouchPullRefreshContentTravel.toPx() }
+  val touchPullRefreshTriggerPx = with(density) { ui.dp(BiliSizing.TouchPullRefreshTriggerDistance).toPx() }
+  val touchPullRefreshMaxPx = with(density) { ui.dp(BiliSizing.TouchPullRefreshMaxDistance).toPx() }
+  val touchPullRefreshContentTravelPx = with(density) { ui.dp(BiliSizing.TouchPullRefreshContentTravel).toPx() }
   val topBleedPx = with(density) { topBleed.roundToPx() }
   var pullRefreshDistancePx by remember { mutableFloatStateOf(0f) }
   val pullRefreshProgress = if (touchPullRefreshTriggerPx <= 0f) {
@@ -92,9 +104,34 @@ internal fun TouchVideoGrid(
   val pullRefreshIndicatorVisible = onRefresh != null && pullRefreshDistancePx > 0f
 
   BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-    val columns = touchVideoGridColumns(maxWidth)
-    val rowCount = (videos.size + columns - 1) / columns
+    val columns = spec.columns
+    val rowCount = spec.rowCount(videos.size)
     val firstVisibleIndex = listState.firstVisibleItemIndex * columns
+    val videoKeys = rememberUpdatedState(videos.mapIndexed(keyFactory))
+    val reflowTracker = remember { VideoGridReflowTracker() }
+
+    LaunchedEffect(listState, spec, maxWidth, density.density, density.fontScale) {
+      // Row keys change when columns change. Preserve a video identity, not the old row number.
+      if (reflowTracker.hasLayout && videoKeys.value.isNotEmpty() && restoreFocusRequestKey <= 0) {
+        val index = resolveVideoGridAnchorIndex(reflowTracker.anchor, videoKeys.value)
+        listState.scrollToItem(spec.rowForIndex(index), reflowTracker.anchor.scrollOffset)
+      }
+      reflowTracker.hasLayout = true
+      snapshotFlow {
+        val keys = videoKeys.value
+        val index = (listState.firstVisibleItemIndex * columns).coerceIn(0, keys.lastIndex.coerceAtLeast(0))
+        VideoGridAnchor(keys.getOrNull(index), index, listState.firstVisibleItemScrollOffset)
+      }.collect { reflowTracker.anchor = it }
+    }
+
+    LaunchedEffect(restoreFocusRequestKey, videos.size, spec) {
+      if (restoreFocusRequestKey <= 0 || videos.isEmpty()) return@LaunchedEffect
+      val index = requestedRestoreIndex.coerceIn(0, videos.lastIndex)
+      listState.scrollToItem(spec.rowForIndex(index))
+      withFrameNanos { }
+      // Touch restores the viewport only; it must not activate D-pad focus or the IME.
+      onRestoreFocusHandled(restoreFocusRequestKey)
+    }
 
     VideoThumbnailPrefetcher(
       videos = videos,
@@ -203,9 +240,9 @@ internal fun TouchVideoGrid(
           start = horizontalPadding,
           top = topPadding,
           end = horizontalPadding,
-          bottom = BiliSizing.VideoGridBottomPadding,
+          bottom = ui.dp(BiliSizing.VideoGridBottomPadding),
         ),
-        verticalArrangement = Arrangement.spacedBy(BiliSizing.VideoGridSpacing),
+        verticalArrangement = Arrangement.spacedBy(ui.dp(BiliSizing.VideoGridSpacing)),
       ) {
         items(
           count = rowCount,
@@ -217,7 +254,7 @@ internal fun TouchVideoGrid(
         ) { row ->
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(BiliSizing.VideoGridSpacing),
+            horizontalArrangement = Arrangement.spacedBy(ui.dp(BiliSizing.VideoGridSpacing)),
           ) {
             repeat(columns) { column ->
               val index = row * columns + column
@@ -226,6 +263,7 @@ internal fun TouchVideoGrid(
                 VideoCard(
                   video = video,
                   mode = cardMode,
+                  contentScale = spec.cardContentScale,
                   modifier = Modifier.weight(1f),
                   onFocused = {
                     onFocusedIndexChange(index, video)
@@ -253,20 +291,13 @@ internal fun TouchVideoGrid(
   }
 }
 
-private fun touchVideoGridColumns(width: Dp): Int {
-  return when {
-    width < 720.dp -> 2
-    width < 1040.dp -> 3
-    else -> BiliSizing.VideoGridColumns
-  }
-}
-
 @Composable
 private fun TouchPullRefreshIndicator(
   visible: Boolean,
   ready: Boolean,
   modifier: Modifier = Modifier,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   val performancePolicy = LocalBiliPerformancePolicy.current
   val targetVisibility = if (visible) 1f else 0f
@@ -316,11 +347,11 @@ private fun TouchPullRefreshIndicator(
 
   Box(
     modifier = modifier
-      .padding(top = BiliSizing.TouchPullRefreshIndicatorTopPadding)
+      .padding(top = ui.dp(BiliSizing.TouchPullRefreshIndicatorTopPadding))
       .graphicsLayer {
         alpha = visibility
       }
-      .size(BiliSizing.TouchPullRefreshSpinnerSize),
+      .size(ui.dp(BiliSizing.TouchPullRefreshSpinnerSize)),
     contentAlignment = Alignment.Center,
   ) {
     Canvas(
@@ -330,7 +361,7 @@ private fun TouchPullRefreshIndicator(
           rotationZ = spinnerRotation
         },
     ) {
-      val strokeWidth = BiliFocus.BorderWidth.toPx()
+      val strokeWidth = ui.dp(BiliFocus.BorderWidth).toPx()
       val strokeInset = strokeWidth / 2f
       drawArc(
         color = indicatorColor,

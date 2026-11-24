@@ -1,6 +1,12 @@
 package com.kirin.bilitv.ui.settings
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,12 +15,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +35,7 @@ import com.kirin.bilitv.core.i18n.ChineseTextVariant
 import com.kirin.bilitv.core.player.CodecCapability
 import com.kirin.bilitv.core.player.PlaybackCodecPreference
 import com.kirin.bilitv.core.player.PlaybackQualityPreference
+import com.kirin.bilitv.core.settings.AppUiSize
 import com.kirin.bilitv.core.settings.AppVisualPerformanceMode
 import com.kirin.bilitv.core.settings.HomeThemeVariant
 import com.kirin.bilitv.ui.focus.BiliFocusableSurface
@@ -43,50 +54,24 @@ internal fun SettingsOptionRow(
   onFocused: () -> Unit = {},
   onClick: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   BiliFocusableSurface(
     scaleOnFocus = false,
     shadowOnFocus = false,
-    shape = RoundedCornerShape(BiliRadius.Panel),
+    shape = RoundedCornerShape(ui.dp(BiliRadius.Panel)),
     onClick = onClick,
     onFocused = onFocused,
-    modifier = modifier
-      .fillMaxWidth()
-      .height(BiliSizing.SettingsRowHeight),
+    modifier = modifier.fillMaxWidth().heightIn(min = ui.dp(BiliSizing.SettingsRowHeight)),
   ) {
-    Row(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(start = BiliSpacing.Lg, end = BiliSpacing.Xl),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column(
-        modifier = Modifier.weight(1f),
-      ) {
-        Text(
-          text = title,
-          color = homeColors.textPrimary,
-          fontSize = BiliTypography.Body,
-          fontWeight = FontWeight.Bold,
-        )
-        Text(
-          text = description,
-          color = homeColors.textSecondary,
-          fontSize = BiliTypography.BodySmall,
-          modifier = Modifier.padding(top = BiliSpacing.Xs),
-        )
-      }
-      Text(
+    SettingsRowContent(title, description) { inline ->
+      if (value.isNotEmpty()) Text(
         text = value,
         color = homeColors.accent,
-        fontSize = BiliTypography.Body,
+        fontSize = ui.sp(BiliTypography.Body),
         fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.End,
-        modifier = Modifier
-          .padding(start = BiliSpacing.Lg)
-          .width(BiliSizing.SettingsCodecValueWidth),
+        modifier = if (inline) Modifier.width(ui.dp(BiliSizing.SettingsCodecValueWidth)) else Modifier.fillMaxWidth(),
       )
     }
   }
@@ -100,15 +85,45 @@ internal fun SettingsActionRow(
   modifier: Modifier = Modifier,
   onFocused: () -> Unit = {},
   onClick: () -> Unit,
+) = SettingsOptionRow(title, description, value, modifier, onFocused, onClick)
+
+@Composable
+private fun SettingsRowContent(
+  title: String,
+  description: String,
+  enabled: Boolean = true,
+  trailing: @Composable (Boolean) -> Unit,
 ) {
-  SettingsOptionRow(
-    title = title,
-    description = description,
-    value = value,
-    modifier = modifier,
-    onFocused = onFocused,
-    onClick = onClick,
-  )
+  val ui = LocalUiMetrics.current
+  val homeColors = LocalHomeColors.current
+  BoxWithConstraints(modifier = Modifier.fillMaxWidth().heightIn(min = ui.dp(BiliSizing.SettingsRowHeight))) {
+    val inline = maxWidth >= ui.dp(BiliSizing.SettingsRowInlineMinWidth)
+    val label: @Composable (Modifier) -> Unit = { labelModifier ->
+      Column(modifier = labelModifier) {
+        Text(title, color = if (enabled) homeColors.textPrimary else homeColors.textTertiary,
+          fontSize = ui.sp(BiliTypography.Body), fontWeight = FontWeight.Bold)
+        Text(description, color = if (enabled) homeColors.textSecondary else homeColors.textTertiary,
+          fontSize = ui.sp(BiliTypography.BodySmall), modifier = Modifier.padding(top = ui.dp(BiliSpacing.Xs)))
+      }
+    }
+    if (inline) {
+      Row(modifier = Modifier.fillMaxWidth().align(Alignment.Center)
+        .padding(horizontal = ui.dp(BiliSpacing.Lg), vertical = ui.dp(BiliSpacing.Md)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(ui.dp(BiliSpacing.Lg))) {
+        label(Modifier.weight(1f))
+        trailing(true)
+      }
+    } else {
+      Column(modifier = Modifier.fillMaxWidth().align(Alignment.Center)
+        .padding(horizontal = ui.dp(BiliSpacing.Lg), vertical = ui.dp(BiliSpacing.Md)),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(ui.dp(BiliSpacing.Sm))) {
+        label(Modifier.fillMaxWidth())
+        trailing(false)
+      }
+    }
+  }
 }
 
 @Composable
@@ -121,72 +136,28 @@ internal fun SettingsToggleRow(
   onFocused: () -> Unit = {},
   onCheckedChange: (Boolean) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   BiliFocusableSurface(
     scaleOnFocus = false,
     shadowOnFocus = false,
-    shape = RoundedCornerShape(BiliRadius.Panel),
-    onClick = {
-      if (enabled) {
-        onCheckedChange(!checked)
-      }
-    },
+    shape = RoundedCornerShape(ui.dp(BiliRadius.Panel)),
+    onClick = { if (enabled) onCheckedChange(!checked) },
     onFocused = onFocused,
-    modifier = modifier
-      .fillMaxWidth()
-      .height(BiliSizing.SettingsRowHeight),
+    modifier = modifier.fillMaxWidth().heightIn(min = ui.dp(BiliSizing.SettingsRowHeight))
+      .semantics {
+        role = Role.Switch
+        toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
+        if (!enabled) disabled()
+      },
   ) {
-    Row(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(horizontal = BiliSpacing.Lg),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column(
-        modifier = Modifier.weight(1f),
-      ) {
-        Text(
-          text = title,
-          color = if (enabled) homeColors.textPrimary else homeColors.textTertiary,
-          fontSize = BiliTypography.Body,
-          fontWeight = FontWeight.Bold,
-        )
-        Text(
-          text = description,
-          color = if (enabled) homeColors.textSecondary else homeColors.textTertiary,
-          fontSize = BiliTypography.BodySmall,
-          modifier = Modifier.padding(top = BiliSpacing.Xs),
-        )
-      }
-      Box(
-        modifier = Modifier.padding(start = BiliSpacing.Lg),
-      ) {
-        Switch(
-          checked = checked,
-          enabled = enabled,
-          onCheckedChange = {
-            if (enabled) {
-              onCheckedChange(it)
-            }
-          },
-          colors = SwitchDefaults.colors(
-            checkedTrackColor = homeColors.accent,
-            checkedThumbColor = homeColors.textPrimary,
-            checkedBorderColor = homeColors.accent,
-            uncheckedTrackColor = homeColors.glassSurfaceStrong,
-            uncheckedThumbColor = homeColors.textSecondary,
-            uncheckedBorderColor = homeColors.glassBorder,
-            disabledCheckedTrackColor = homeColors.glassSurfaceStrong,
-            disabledCheckedThumbColor = homeColors.textTertiary,
-            disabledCheckedBorderColor = homeColors.glassBorder,
-            disabledUncheckedTrackColor = homeColors.cardSurface,
-            disabledUncheckedThumbColor = homeColors.textTertiary,
-            disabledUncheckedBorderColor = homeColors.glassBorder,
-          ),
-          modifier = Modifier.focusProperties {
-            canFocus = false
-          },
-        )
+    SettingsRowContent(title, description, enabled) {
+      Box(modifier = Modifier.size(ui.dp(BiliSizing.ToggleTrackWidth), ui.dp(BiliSizing.ToggleTrackHeight))
+        .background(if (enabled && checked) homeColors.accent else homeColors.glassSurfaceStrong, RoundedCornerShape(ui.dp(BiliRadius.Pill)))
+        .padding(ui.dp(BiliSpacing.Xs)),
+        contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart) {
+        Box(modifier = Modifier.size(ui.dp(BiliSizing.ToggleThumbSize))
+          .background(if (!enabled) homeColors.textTertiary else homeColors.textPrimary, RoundedCornerShape(ui.dp(BiliRadius.Pill))))
       }
     }
   }
@@ -247,4 +218,28 @@ internal fun PlaybackCodecPreference.codecLabel(): String {
     PlaybackCodecPreference.H265 -> stringResource(R.string.settings_playback_codec_h265)
     PlaybackCodecPreference.Av1 -> stringResource(R.string.settings_playback_codec_av1)
   }
+}
+
+@Composable
+internal fun AppUiSize.uiSizeLabel(): String = stringResource(when (this) {
+  AppUiSize.Small -> R.string.settings_ui_size_small
+  AppUiSize.Medium -> R.string.settings_ui_size_medium
+  AppUiSize.Large -> R.string.settings_ui_size_large
+})
+
+@Composable
+internal fun UiSizeSettingsRow(
+  size: AppUiSize,
+  onUiSizeChange: (AppUiSize) -> Unit,
+  modifier: Modifier = Modifier,
+  onFocused: () -> Unit = {},
+) {
+  SettingsOptionRow(
+    title = stringResource(R.string.settings_ui_size_title),
+    description = stringResource(R.string.settings_ui_size_description),
+    value = size.uiSizeLabel(),
+    modifier = modifier,
+    onFocused = onFocused,
+    onClick = { onUiSizeChange(size.next()) },
+  )
 }

@@ -1,9 +1,13 @@
 package com.kirin.bilitv.ui.home
 
+import com.kirin.bilitv.ui.theme.LocalUiMetrics
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -16,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -89,6 +94,7 @@ internal fun RecommendScreen(
   onMoveLeftToNav: () -> Boolean,
   onVideoSelected: (VideoSummary) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val viewState by viewModel.viewState.collectAsStateWithLifecycle()
   val sections = viewState.sections
   val selectedSectionKey = viewState.selectedSectionKey.takeIf { key -> sections.any { section -> section.key == key } }
@@ -147,7 +153,7 @@ internal fun RecommendScreen(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .padding(top = BiliSpacing.Xs),
+        .padding(top = ui.dp(BiliSpacing.Xs)),
     ) {
       when (val currentState = state) {
         RecommendState.Loading -> VideoGridSkeleton()
@@ -205,14 +211,15 @@ private fun RecommendHeader(
   onSectionSelected: (HomeSection) -> Unit,
   onSectionFocused: (HomeSection) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   val homeColors = LocalHomeColors.current
   val performancePolicy = LocalBiliPerformancePolicy.current
-  val capsuleShape = RoundedCornerShape(BiliRadius.Pill)
+  val capsuleShape = RoundedCornerShape(ui.dp(BiliRadius.Pill))
   val liquidGlassEnabled = performancePolicy.cinematicVisualEffectsEnabled && performancePolicy.liquidGlassCardsEnabled
   BoxWithConstraints(
     modifier = Modifier
       .fillMaxWidth()
-      .height(BiliSizing.HomeSectionCapsuleHeight),
+      .heightIn(min = ui.dp(BiliSizing.HomeSectionCapsuleHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget + ui.dp(BiliSizing.HomeSectionCapsuleVerticalPadding) * 2)),
     contentAlignment = Alignment.Center,
   ) {
     val capsuleMaxWidth = maxWidth
@@ -220,24 +227,25 @@ private fun RecommendHeader(
     val capsuleArrangement = if (sections.size <= HomeSectionCapsuleSpreadMaxCount) {
       Arrangement.SpaceEvenly
     } else {
-      Arrangement.spacedBy(BiliSizing.HomeSectionCapsuleItemSpacing)
+      Arrangement.spacedBy(ui.dp(BiliSizing.HomeSectionCapsuleItemSpacing))
     }
     Row(
       modifier = Modifier
         .align(Alignment.Center)
-        .offset(y = -BiliSizing.HomeSectionCapsuleTopOffset)
+        .offset(y = -ui.dp(BiliSizing.HomeSectionCapsuleTopOffset))
         .widthIn(min = capsuleMinWidth, max = capsuleMaxWidth)
+        .horizontalScroll(rememberScrollState())
         .clip(capsuleShape)
         .biliLiquidGlassSurface(
           enabled = liquidGlassEnabled,
           shape = capsuleShape,
           surfaceColor = homeColors.glassSurface.copy(alpha = BiliFocus.HomeSectionCapsuleSurfaceAlpha),
           borderColor = homeColors.textPrimary.copy(alpha = BiliFocus.HomeSectionCapsuleBorderAlpha),
-          borderWidth = BiliFocus.RestingBorderWidth,
+          borderWidth = ui.dp(BiliFocus.RestingBorderWidth),
         )
         .padding(
-          horizontal = BiliSizing.HomeSectionCapsuleHorizontalPadding,
-          vertical = BiliSizing.HomeSectionCapsuleVerticalPadding,
+          horizontal = ui.dp(BiliSizing.HomeSectionCapsuleHorizontalPadding),
+          vertical = ui.dp(BiliSizing.HomeSectionCapsuleVerticalPadding),
         ),
       horizontalArrangement = capsuleArrangement,
       verticalAlignment = Alignment.CenterVertically,
@@ -277,10 +285,11 @@ private fun HomeSectionTab(
   onClick: () -> Unit,
   onFocused: () -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   var focused by remember { mutableStateOf(false) }
   val performancePolicy = LocalBiliPerformancePolicy.current
   val homeColors = LocalHomeColors.current
-  val shape = RoundedCornerShape(BiliRadius.Pill)
+  val shape = RoundedCornerShape(ui.dp(BiliRadius.Pill))
   val targetBorderColor = if (focused) homeColors.accent else BiliColors.Transparent
   val targetTextColor = when {
     selected -> homeColors.accent
@@ -289,12 +298,12 @@ private fun HomeSectionTab(
   }
   val borderWidth = if (performancePolicy.motionEnabled) {
     animateDpAsState(
-      targetValue = if (focused) BiliFocus.BorderWidth else BiliFocus.RestingBorderWidth,
+      targetValue = if (focused) ui.dp(BiliFocus.BorderWidth) else ui.dp(BiliFocus.RestingBorderWidth),
       animationSpec = androidx.compose.animation.core.tween(BiliMotion.FocusMs, easing = BiliMotion.FocusEasing),
       label = "homeSectionBorderWidth",
     ).value
   } else {
-    if (focused) BiliFocus.BorderWidth else BiliFocus.RestingBorderWidth
+    if (focused) ui.dp(BiliFocus.BorderWidth) else ui.dp(BiliFocus.RestingBorderWidth)
   }
   val borderColor = if (performancePolicy.motionEnabled) {
     animateColorAsState(
@@ -318,8 +327,8 @@ private fun HomeSectionTab(
 
   Box(
     modifier = modifier
-      .height(BiliSizing.HomeSectionTabHeight)
-      .widthIn(min = BiliSizing.HomeSectionTabCompactMinWidth)
+      .heightIn(min = ui.dp(BiliSizing.HomeSectionTabHeight).coerceAtLeast(BiliSizing.MinimumTouchTarget))
+      .widthIn(min = ui.dp(BiliSizing.HomeSectionTabCompactMinWidth).coerceAtLeast(BiliSizing.MinimumTouchTarget))
       .clip(shape)
       .background(
         if (focused) {
@@ -353,14 +362,14 @@ private fun HomeSectionTab(
         indication = null,
         onClick = onClick,
       )
-      .padding(horizontal = BiliSpacing.Sm),
+      .padding(horizontal = ui.dp(BiliSpacing.Sm)),
     contentAlignment = Alignment.Center,
   ) {
     Text(
       text = stringResource(section.titleRes()),
       color = textColor,
-      fontSize = BiliTypography.HomeSectionTab,
-      lineHeight = BiliTypography.HomeSectionTabLineHeight,
+      fontSize = ui.sp(BiliTypography.HomeSectionTab),
+      lineHeight = ui.sp(BiliTypography.HomeSectionTabLineHeight),
       fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium,
       textAlign = TextAlign.Center,
       maxLines = 1,
@@ -387,6 +396,7 @@ private fun RecommendGrid(
   onMoveLeftToNav: () -> Boolean,
   onVideoSelected: (VideoSummary) -> Unit,
 ) {
+  val ui = LocalUiMetrics.current
   AdaptiveVideoGrid(
     videos = videos,
     firstItemFocusRequester = firstItemFocusRequester,
@@ -404,8 +414,8 @@ private fun RecommendGrid(
         selectedSectionFocusRequester.requestFocus()
       }.isSuccess
     },
-    topPadding = BiliSizing.HomeVideoGridTopPadding + BiliSizing.HomeVideoGridTopBleed,
-    topBleed = BiliSizing.HomeVideoGridTopBleed,
+    topPadding = ui.dp(BiliSizing.HomeVideoGridTopPadding) + ui.dp(BiliSizing.HomeVideoGridTopBleed),
+    topBleed = ui.dp(BiliSizing.HomeVideoGridTopBleed),
     onVideoSelected = onVideoSelected,
   )
 }

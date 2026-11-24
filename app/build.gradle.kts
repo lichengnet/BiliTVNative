@@ -26,8 +26,8 @@ android {
     applicationId = "com.kirin.bilitv"
     minSdk = 23
     targetSdk = 36
-    versionCode = 101
-    versionName = "1.0.1"
+    versionCode = 107
+    versionName = "1.0.7-chevy"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     ndk {
@@ -39,10 +39,12 @@ android {
 
   buildTypes {
     debug {
+      buildConfigField("boolean", "COMPATIBILITY_DIAGNOSTICS", "true")
       isMinifyEnabled = false
       isShrinkResources = false
     }
     release {
+      buildConfigField("boolean", "COMPATIBILITY_DIAGNOSTICS", providers.gradleProperty("compatibilityDiagnostics").orNull.toBoolean().toString())
       signingConfig = signingConfigs.getByName("debug")
       isMinifyEnabled = true
       isShrinkResources = true
@@ -54,6 +56,7 @@ android {
   }
 
   buildFeatures {
+    buildConfig = true
     compose = true
   }
 
