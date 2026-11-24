@@ -23,6 +23,21 @@ internal fun playerDiagnostics(trace: () -> PlaybackTrace?, isCurrent: () -> Boo
   override fun onVideoCodecError(eventTime: AnalyticsListener.EventTime, videoCodecError: Exception) {
     if (isCurrent()) trace()?.event(SessionEvent.PLAY_FAILURE, "VIDEO_CODEC", playerFailureFields(videoCodecError))
   }
+  override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+    if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_DECODER_READY", mapOf("decoder" to decoderName), PlaybackLogLevel.Debug)
+  }
+  override fun onAudioInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
+    if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_FORMAT", mapOf(
+      "codec" to (format.codecs ?: format.sampleMimeType?.substringAfter('/') ?: "UNKNOWN"),
+      "sampleRate" to format.sampleRate.toString(), "channels" to format.channelCount.toString(),
+    ), PlaybackLogLevel.Debug)
+  }
+  override fun onAudioPositionAdvancing(eventTime: AnalyticsListener.EventTime, playoutStartSystemTimeMs: Long) {
+    if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_ADVANCING", level = PlaybackLogLevel.Debug)
+  }
+  override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
+    if (isCurrent()) trace()?.event(SessionEvent.PLAY_FAILURE, "AUDIO_SINK", playerFailureFields(audioSinkError))
+  }
   override fun onVideoSizeChanged(eventTime: AnalyticsListener.EventTime, videoSize: VideoSize) {
     if (isCurrent()) dimensions("VIDEO_SIZE", videoSize.width, videoSize.height)
   }

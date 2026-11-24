@@ -1,6 +1,7 @@
 package com.kirin.bilitv.core.player
 
-internal enum class PlaybackFailureKind { Decoder, UnsupportedVideo, VideoTracks, Output, Network, Audio, Other }
+internal enum class PlaybackFailureKind { Decoder, UnsupportedVideo, VideoTracks, Output, Network, Audio, Stalled, Other }
+internal enum class LevelTrialAvailability { Unavailable, Available, Used }
 
 internal data class PlaybackAttemptLimit(val qualityId: Int, val longEdge: Int, val shortEdge: Int) {
   fun permits(track: PlaybackTrack): Boolean = track.width > 0 && track.height > 0 &&
@@ -64,12 +65,15 @@ internal class PlaybackRecoveryPolicy {
     limit = PlaybackAttemptLimit.RecoveryTiers.firstOrNull { it.qualityId == qualityId }
   }
 
-  fun canTryLevel(bvid: String, cid: Long): Boolean =
-    qualityId == PlaybackAttemptLimit.P360.qualityId && bvid.isNotBlank() && cid > 0 && (bvid to cid) !in levelTrials
+  fun levelTrialAvailability(bvid: String, cid: Long): LevelTrialAvailability = when {
+    qualityId != PlaybackAttemptLimit.P360.qualityId || bvid.isBlank() || cid <= 0 -> LevelTrialAvailability.Unavailable
+    (bvid to cid) in levelTrials -> LevelTrialAvailability.Used
+    else -> LevelTrialAvailability.Available
+  }
 
   fun submitLevelTrial(token: Long, info: PlaybackInfo): Boolean {
     if (!isCurrent(token) || info.videoSelectionMode != PlaybackVideoSelectionMode.LevelTrial ||
-      !canTryLevel(info.bvid, info.cid)
+      levelTrialAvailability(info.bvid, info.cid) != LevelTrialAvailability.Available
     ) return false
     levelTrials.add(info.bvid to info.cid)
     levelTrialSubmitted = true

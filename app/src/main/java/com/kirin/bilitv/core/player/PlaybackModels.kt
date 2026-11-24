@@ -31,7 +31,7 @@ data class PlaybackInfo(
   val videoSelectionMode: PlaybackVideoSelectionMode = PlaybackVideoSelectionMode.Normal,
 )
 
-enum class PlaybackVideoSelectionMode { Normal, LevelTrial }
+enum class PlaybackVideoSelectionMode { Normal, LevelTrial, LevelTrialUsed }
 
 data class PlaybackQuality(
   val id: Int,

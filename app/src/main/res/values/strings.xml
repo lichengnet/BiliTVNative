@@ -254,6 +254,7 @@
     <string name="settings_ui_size_large">大／易读</string>
     <string name="player_recovering_quality">正在恢复播放，尝试 %1$s…</string>
     <string name="player_failed_diagnostic">无法播放当前视频（%1$s，错误码 %2$s）。可重试或返回。</string>
+    <string name="player_failed_level_trial_used">本次播放的 360P 硬解试播已用完，重试未找到常规可播轨道（%1$s）。</string>
     <string name="player_playback_quality_360">360P</string>
     <string name="playback_log_title">播放日志</string>
     <string name="playback_log_description">调整日志级别，查看最近的播放详情。</string>

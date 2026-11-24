@@ -19,6 +19,7 @@ internal object SafeDiagnosticFields {
     "retainedVideo", "avc", "result", "mode", "phase", "code", "type", "decoder", "codec", "width", "height", "fps",
     "profile", "level", "levelLimit", "recoverable", "transient", "diagnostic", "source", "errorName", "formatSupport",
     "reason", "http", "apiCode", "javaUsed", "javaMax", "native", "pss", "trim", "class", "method", "line",
+    "stuckType", "timeoutMs", "state", "positionMs", "bufferedMs", "playWhenReady", "isLoading", "suppression", "sampleRate", "channels",
   )
 
   private fun safeValue(key: String, value: String): String {

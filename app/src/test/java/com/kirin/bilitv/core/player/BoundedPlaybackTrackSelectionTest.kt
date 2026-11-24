@@ -13,6 +13,7 @@ class BoundedPlaybackTrackSelectionTest {
 
   private val supported = AvcTrackAssessment(AvcTrackDecision.Supported)
   private val levelOnly = AvcTrackAssessment(AvcTrackDecision.LevelOnly)
+  private val trialAvailable = LevelTrialAvailability.Available
 
   @Test fun codecFilteringNeverAdmitsHevcOrAv1() {
     val avc = track(64, 1280, 720)
@@ -39,13 +40,13 @@ class BoundedPlaybackTrackSelectionTest {
 
   @Test fun unknownCapabilitiesCanUseNormalPathButKnownRejectionNeedsTrial() {
     val avc = track(16, 640, 360)
-    val normal = selectBoundedHardwareAvcTracks(listOf(avc), 16, PlaybackAttemptLimit.P360, true) {
+    val normal = selectBoundedHardwareAvcTracks(listOf(avc), 16, PlaybackAttemptLimit.P360, trialAvailable) {
       AvcTrackAssessment(AvcTrackDecision.CapabilityUnknown)
     }
     assertEquals(listOf(avc), normal.tracks)
     assertEquals(PlaybackVideoSelectionMode.Normal, normal.mode)
     for (reason in listOf(AvcTrackDecision.NoHardwareDecoder, AvcTrackDecision.CapabilityRejected)) {
-      val selected = selectBoundedHardwareAvcTracks(listOf(avc), 16, PlaybackAttemptLimit.P360, true) { AvcTrackAssessment(reason) }
+      val selected = selectBoundedHardwareAvcTracks(listOf(avc), 16, PlaybackAttemptLimit.P360, trialAvailable) { AvcTrackAssessment(reason) }
       assertTrue(selected.tracks.isEmpty())
     }
   }
@@ -53,9 +54,9 @@ class BoundedPlaybackTrackSelectionTest {
   @Test fun trialRequiresExplicit360TierAndSelectsOneLowBitrateTrack() {
     val avc = track(16, 640, 360, bitrate = 5000)
     val low = avc.copy(bandwidth = 1000)
-    assertTrue(selectBoundedHardwareAvcTracks(listOf(low), 32, PlaybackAttemptLimit.P480, true) { levelOnly }.tracks.isEmpty())
+    assertTrue(selectBoundedHardwareAvcTracks(listOf(low), 32, PlaybackAttemptLimit.P480, trialAvailable) { levelOnly }.tracks.isEmpty())
     assertTrue(selectBoundedHardwareAvcTracks(listOf(low), 16, PlaybackAttemptLimit.P360) { levelOnly }.tracks.isEmpty())
-    val result = selectBoundedHardwareAvcTracks(listOf(avc, low), 16, PlaybackAttemptLimit.P360, true) { levelOnly }
+    val result = selectBoundedHardwareAvcTracks(listOf(avc, low), 16, PlaybackAttemptLimit.P360, trialAvailable) { levelOnly }
     assertEquals(listOf(low), result.tracks)
     assertEquals(PlaybackVideoSelectionMode.LevelTrial, result.mode)
   }
@@ -65,15 +66,32 @@ class BoundedPlaybackTrackSelectionTest {
     val tracks = listOf(base.copy(frameRate = null), base.copy(frameRate = "3000001/100000"),
       base.copy(width = 641), base.copy(width = 360, height = 640), base.copy(codecs = "avc"))
     assertFalse(tracks.any(PlaybackTrack::isLevelTrialCandidate))
-    assertTrue(selectBoundedHardwareAvcTracks(tracks, 16, PlaybackAttemptLimit.P360, true) { levelOnly }.tracks.isEmpty())
+    assertTrue(selectBoundedHardwareAvcTracks(tracks, 16, PlaybackAttemptLimit.P360, trialAvailable) { levelOnly }.tracks.isEmpty())
     assertTrue(base.copy(frameRate = "30000/1001").isLevelTrialCandidate())
   }
 
   @Test fun normalCandidatesTakePriorityAndAreSortedWithinTheSelectedTier() {
     val low = track(16, 640, 360, bitrate = 1000, codec = "avc1.64001E")
     val normal = selectBoundedHardwareAvcTracks(listOf(low.copy(bandwidth = 5000), low, track(16, 640, 360)),
-      16, PlaybackAttemptLimit.P360, true) { if (it.codecs == low.codecs) supported else levelOnly }
+      16, PlaybackAttemptLimit.P360, trialAvailable) { if (it.codecs == low.codecs) supported else levelOnly }
     assertEquals(listOf(1000, 5000), normal.tracks.map { it.bandwidth })
     assertEquals(PlaybackVideoSelectionMode.Normal, normal.mode)
+  }
+
+  @Test fun usedTrialIsReportedOnlyForAnOtherwiseEligibleTrack() {
+    val levelOnlyTrack = track(16, 636, 360)
+    val used = LevelTrialAvailability.Used
+    val blocked = selectBoundedHardwareAvcTracks(listOf(levelOnlyTrack), 16, PlaybackAttemptLimit.P360, used) { levelOnly }
+    assertTrue(blocked.tracks.isEmpty())
+    assertEquals(PlaybackVideoSelectionMode.LevelTrialUsed, blocked.mode)
+
+    val normal = selectBoundedHardwareAvcTracks(listOf(levelOnlyTrack), 16, PlaybackAttemptLimit.P360, used) { supported }
+    assertEquals(listOf(levelOnlyTrack), normal.tracks)
+    assertEquals(PlaybackVideoSelectionMode.Normal, normal.mode)
+
+    val unknownRate = levelOnlyTrack.copy(frameRate = null)
+    val noTrack = selectBoundedHardwareAvcTracks(listOf(unknownRate), 16, PlaybackAttemptLimit.P360, used) { levelOnly }
+    assertTrue(noTrack.tracks.isEmpty())
+    assertEquals(PlaybackVideoSelectionMode.Normal, noTrack.mode)
   }
 }

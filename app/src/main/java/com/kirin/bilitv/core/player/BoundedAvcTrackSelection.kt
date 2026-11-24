@@ -22,7 +22,7 @@ internal fun selectBoundedHardwareAvcTracks(
   tracks: List<PlaybackTrack>,
   selectedQualityId: Int,
   limit: PlaybackAttemptLimit?,
-  allowLevelTrial: Boolean = false,
+  levelTrial: LevelTrialAvailability = LevelTrialAvailability.Unavailable,
   assessHardware: (PlaybackTrack) -> AvcTrackAssessment,
 ): BoundedAvcTrackSelection {
   val maxQuality = minOf(selectedQualityId, limit?.qualityId ?: selectedQualityId)
@@ -44,12 +44,16 @@ internal fun selectBoundedHardwareAvcTracks(
     val selected = regular.map { it.track }.filter { it.id == highest }.sortedBy { it.bandwidth }
     return BoundedAvcTrackSelection(selected, evaluations)
   }
-  if (allowLevelTrial && limit == PlaybackAttemptLimit.P360) {
+  if (levelTrial != LevelTrialAvailability.Unavailable && limit == PlaybackAttemptLimit.P360) {
     val trial = evaluations.asSequence().filter { it.assessment.decision == AvcTrackDecision.LevelOnly }
       .map { it.track }.filter(PlaybackTrack::isLevelTrialCandidate)
       .minByOrNull { it.bandwidth.takeIf { rate -> rate > 0 } ?: Int.MAX_VALUE }
     if (trial != null) {
-      return BoundedAvcTrackSelection(listOf(trial), evaluations, PlaybackVideoSelectionMode.LevelTrial)
+      return if (levelTrial == LevelTrialAvailability.Available) {
+        BoundedAvcTrackSelection(listOf(trial), evaluations, PlaybackVideoSelectionMode.LevelTrial)
+      } else {
+        BoundedAvcTrackSelection(emptyList(), evaluations, PlaybackVideoSelectionMode.LevelTrialUsed)
+      }
     }
   }
   return BoundedAvcTrackSelection(emptyList(), evaluations)

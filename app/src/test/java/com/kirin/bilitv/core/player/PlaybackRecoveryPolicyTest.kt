@@ -34,8 +34,8 @@ class PlaybackRecoveryPolicyTest {
     assertTrue(p.next(PlaybackFailureKind.UnsupportedVideo)); assertEquals(16, p.qualityId)
     assertFalse(p.next(PlaybackFailureKind.UnsupportedVideo)); assertEquals(4, p.attemptCount)
   }
-  @Test fun transportAudioAndOutputFailuresDoNotConsumeRecoveryBudget() {
-    for (kind in listOf(PlaybackFailureKind.Network, PlaybackFailureKind.Audio, PlaybackFailureKind.Output, PlaybackFailureKind.Other)) {
+  @Test fun nonVideoFailuresDoNotConsumeRecoveryBudget() {
+    for (kind in listOf(PlaybackFailureKind.Network, PlaybackFailureKind.Audio, PlaybackFailureKind.Output, PlaybackFailureKind.Stalled, PlaybackFailureKind.Other)) {
       val p = policy(80); val token = p.generation
       assertFalse(p.next(kind)); assertEquals(1, p.attemptCount); assertTrue(p.isCurrent(token))
     }
@@ -128,16 +128,16 @@ class PlaybackRecoveryPolicyTest {
   @Test fun trialRequiresCurrentGenerationAndIsConsumedOnlyOnSubmission() {
     val p = policy(16)
     val selected = info(track(16, 640, 360)).copy(videoSelectionMode = PlaybackVideoSelectionMode.LevelTrial)
-    assertTrue(p.canTryLevel(selected.bvid, selected.cid))
+    assertEquals(LevelTrialAvailability.Available, p.levelTrialAvailability(selected.bvid, selected.cid))
     assertFalse(p.submitLevelTrial(p.generation - 1, selected))
-    assertTrue(p.canTryLevel(selected.bvid, selected.cid))
+    assertEquals(LevelTrialAvailability.Available, p.levelTrialAvailability(selected.bvid, selected.cid))
     assertTrue(p.submitLevelTrial(p.generation, selected))
     assertFalse(p.next(PlaybackFailureKind.Decoder))
     p.manualRetry()
-    assertFalse(p.canTryLevel(selected.bvid, selected.cid))
+    assertEquals(LevelTrialAvailability.Used, p.levelTrialAvailability(selected.bvid, selected.cid))
     p.start(16, bvid = selected.bvid, cid = selected.cid)
-    assertFalse(p.canTryLevel(selected.bvid, selected.cid))
-    assertTrue(p.canTryLevel(selected.bvid, selected.cid + 1))
+    assertEquals(LevelTrialAvailability.Used, p.levelTrialAvailability(selected.bvid, selected.cid))
+    assertEquals(LevelTrialAvailability.Available, p.levelTrialAvailability(selected.bvid, selected.cid + 1))
   }
 
   private fun track(id: Int, w: Int, h: Int) = PlaybackTrack(id, "https://example.invalid/video", emptyList(), 1000, "avc1.640033", w, h, "video/mp4", PlaybackSegmentBase("0-1", "2-3"))

@@ -8,6 +8,7 @@ import com.kirin.bilitv.core.player.PlaybackCodecPreference
 import com.kirin.bilitv.core.player.PlaybackInfo
 import com.kirin.bilitv.core.player.PlaybackAttemptLimit
 import com.kirin.bilitv.core.player.PlaybackFailureKind
+import com.kirin.bilitv.core.player.LevelTrialAvailability
 import com.kirin.bilitv.core.device.DeviceCompatibility
 import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.network.BiliApiCodeException
@@ -19,7 +20,10 @@ import com.kirin.bilitv.core.player.PlaybackRequest
 import com.kirin.bilitv.core.player.PlaybackTrack
 import com.kirin.bilitv.core.player.PlaybackTrace
 import com.kirin.bilitv.core.player.PlaybackVideoMetadata
+import com.kirin.bilitv.core.player.PlaybackVideoSelectionMode
 import kotlinx.coroutines.CancellationException
+
+internal const val LevelTrialUsedCode = "LEVEL_TRIAL_USED"
 
 internal data class PlayerLoadViewState(
   val activeRequest: PlaybackRequest,
@@ -74,7 +78,7 @@ internal class PlayerLoadStateHolder(
     resumePositionMs: Long? = null,
     recoveryCid: Long? = null,
     trace: PlaybackTrace? = null,
-    canTryLevel: ((String, Long) -> Boolean)? = null,
+    levelTrialAvailability: ((String, Long) -> LevelTrialAvailability)? = null,
   ): PlayerScreenState.Ready? {
     val loadToken = ++loadGeneration
     val loadRequest = viewState.activeRequest
@@ -128,10 +132,14 @@ internal class PlayerLoadStateHolder(
         codecPreference = codecPreference,
         qualityPreference = qualityPreference,
         attemptLimit = attemptLimit,
-        allowLevelTrial = canTryLevel?.invoke(resolvedRequest.bvid, cid) == true,
+        levelTrial = levelTrialAvailability?.invoke(resolvedRequest.bvid, cid) ?: LevelTrialAvailability.Unavailable,
         trace = lastTrace,
       )
       if (!current()) return null
+      if (info.videoSelectionMode == PlaybackVideoSelectionMode.LevelTrialUsed) {
+        fail("", PlaybackFailureKind.VideoTracks, LevelTrialUsedCode)
+        return null
+      }
       if (codecPreference == PlaybackCodecPreference.H264 && info.videoTracks.isEmpty() && info.audioTracks.isNotEmpty()) {
         fail(missingH264Message, PlaybackFailureKind.VideoTracks, "VIDEO_TRACKS")
         return null

@@ -92,6 +92,7 @@ import com.kirin.bilitv.R
 import com.kirin.bilitv.core.device.CompatibilityDiagnostics
 import com.kirin.bilitv.core.device.DeviceCompatibility
 import com.kirin.bilitv.core.device.PlaybackLogLevel
+import com.kirin.bilitv.core.device.SessionDiagnostics
 import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.model.VideoSummary
 import com.kirin.bilitv.core.model.isWatchCompleted
@@ -1147,7 +1148,8 @@ fun PlayerScreen(
 
   fun handlePlayerFailure(kind: PlaybackFailureKind, code: String, error: Throwable? = null) {
     val trace = outputSession.trace
-    trace?.event(SessionEvent.PLAY_FAILURE, kind.name, mapOf("code" to code) + error?.let(::playerFailureFields).orEmpty())
+    val signals = if (trace != null && kind == PlaybackFailureKind.Stalled) playbackSignalFields(player) else emptyMap()
+    trace?.event(SessionEvent.PLAY_FAILURE, kind.name, mapOf("code" to code) + error?.let(::playerFailureFields).orEmpty() + signals)
     if (!compatibility.isJacinto6) {
       playerLoadStateHolder.fail(error?.message.orEmpty(), kind, code)
       return
@@ -1180,29 +1182,24 @@ fun PlayerScreen(
       playerLoadStateHolder.fail("", kind, code)
     }
   }
-  val latestFailureHandler = rememberUpdatedState(::handlePlayerFailure)
-
   DisposableEffect(player) {
-    val diagnostics = if (CompatibilityDiagnostics.enabled) playerDiagnostics(trace = { outputSession.trace },
-      isCurrent = { !outputSession.isReleased && latestOutputSession.value === outputSession && (!compatibility.isJacinto6 || outputSession.mediaGeneration == latestRecoveryPolicy.value.generation) },
-    ) else null
+    fun isCurrent(): Boolean = !outputSession.isReleased && latestOutputSession.value === outputSession &&
+      (!compatibility.isJacinto6 || outputSession.mediaGeneration == latestRecoveryPolicy.value.generation)
+    val diagnostics = if (CompatibilityDiagnostics.enabled) {
+      playerDiagnostics(trace = { outputSession.trace }, isCurrent = ::isCurrent)
+    } else null
     diagnostics?.let(player::addAnalyticsListener)
     val listener = object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
-        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
-        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
-        latestFailureHandler.value(playerFailureKind(error), "D" + error.errorCode, error)
+        if (isCurrent()) handlePlayerFailure(playerFailureKind(error), "D" + error.errorCode, error)
       }
 
       override fun onRenderedFirstFrame() {
-        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
-        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
-        outputSession.onFirstFrame()
+        if (isCurrent()) outputSession.onFirstFrame()
       }
 
       override fun onIsPlayingChanged(isPlaying: Boolean) {
-        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
-        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
+        if (!isCurrent()) return
         playerActuallyPlaying = isPlaying
         val pausedByUser = !isPlaying && !player.playWhenReady && player.playbackState != Player.STATE_ENDED
         playbackPaused = pausedByUser
@@ -1213,10 +1210,18 @@ fun PlayerScreen(
       }
 
       override fun onPlaybackStateChanged(playbackState: Int) {
-        if (outputSession.isReleased || latestOutputSession.value !== outputSession) return
-        if (compatibility.isJacinto6 && outputSession.mediaGeneration != latestRecoveryPolicy.value.generation) return
-        if (playbackState == Player.STATE_ENDED && latestPlayerState.value is PlayerScreenState.Ready && player.mediaItemCount > 0) {
+        if (isCurrent() && playbackState == Player.STATE_ENDED && latestPlayerState.value is PlayerScreenState.Ready && player.mediaItemCount > 0) {
           latestReportPlaybackCompleted.value()
+        }
+      }
+
+      override fun onEvents(player: Player, events: Player.Events) {
+        if (isCurrent() && SessionDiagnostics.captures(PlaybackLogLevel.Debug) && events.containsAny(
+            Player.EVENT_PLAYBACK_STATE_CHANGED, Player.EVENT_PLAY_WHEN_READY_CHANGED,
+            Player.EVENT_IS_LOADING_CHANGED, Player.EVENT_PLAYBACK_SUPPRESSION_REASON_CHANGED,
+          )
+        ) {
+          outputSession.trace?.event(SessionEvent.PLAY_ATTEMPT, "STATE", playbackSignalFields(player), PlaybackLogLevel.Debug)
         }
       }
     }
@@ -1327,7 +1332,7 @@ fun PlayerScreen(
       resumePositionMs = if (compatibility.isJacinto6) recoveryPolicy.resumePositionOverride else null,
       recoveryCid = if (compatibility.isJacinto6) recoveryPolicy.recoveryCid else null,
       trace = trace,
-      canTryLevel = if (compatibility.isJacinto6) recoveryPolicy::canTryLevel else null,
+      levelTrialAvailability = if (compatibility.isJacinto6) recoveryPolicy::levelTrialAvailability else null,
     )
     if (!recoveryPolicy.isCurrent(preparationToken) || outputSession.isReleased) return@LaunchedEffect
     outputSession.trace = playerLoadStateHolder.lastTrace
@@ -1726,9 +1731,12 @@ fun PlayerScreen(
           if (compatibility.isJacinto6 && recoveryPolicy.attemptCount > 1) stringResource(R.string.player_recovering_quality, attemptedQualityLabel) else null,
         )
         is PlayerScreenState.Failed -> PlayerFailedOverlay(
-          message = if ((compatibility.isJacinto6 || CompatibilityDiagnostics.enabled) && state.diagnosticCode.isNotBlank()) stringResource(
-            R.string.player_failed_diagnostic, attemptedQualityLabel, state.diagnosticCode,
-          ) else stringResource(R.string.player_failed_with_message, state.message),
+          message = when {
+            state.diagnosticCode == LevelTrialUsedCode -> stringResource(R.string.player_failed_level_trial_used, LevelTrialUsedCode)
+            (compatibility.isJacinto6 || CompatibilityDiagnostics.enabled) && state.diagnosticCode.isNotBlank() ->
+              stringResource(R.string.player_failed_diagnostic, attemptedQualityLabel, state.diagnosticCode)
+            else -> stringResource(R.string.player_failed_with_message, state.message)
+          },
           touchMode = touchMode,
           onRetry = {
             if (compatibility.isJacinto6) rebuildPlayer(manual = true) else playerLoadStateHolder.retry()

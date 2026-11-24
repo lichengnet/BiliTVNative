@@ -53,7 +53,7 @@ class PlaybackRepository(
     codecPreference: PlaybackCodecPreference,
     qualityPreference: PlaybackQualityPreference,
     attemptLimit: PlaybackAttemptLimit? = null,
-    allowLevelTrial: Boolean = false,
+    levelTrial: LevelTrialAvailability = LevelTrialAvailability.Unavailable,
     trace: PlaybackTrace? = null,
   ): PlaybackInfo {
     val sessData = sessionStore.sessData.first()
@@ -101,7 +101,7 @@ class PlaybackRepository(
       codecPreference = effectiveCodecPreference,
       codecCapability = codecCapability,
       attemptLimit = attemptLimit,
-      allowLevelTrial = allowLevelTrial,
+      levelTrial = levelTrial,
       trace = trace,
     )
   }
@@ -264,7 +264,7 @@ class PlaybackRepository(
     codecPreference: PlaybackCodecPreference,
     codecCapability: CodecCapability,
     attemptLimit: PlaybackAttemptLimit?,
-    allowLevelTrial: Boolean,
+    levelTrial: LevelTrialAvailability,
     trace: PlaybackTrace?,
   ): PlaybackInfo {
     val dash = data.obj("dash")
@@ -286,7 +286,8 @@ class PlaybackRepository(
     val avcSelection = if (DeviceCompatibility.current.isJacinto6) {
       val requestLimit = attemptLimit ?: PlaybackAttemptLimit.RecoveryTiers.firstOrNull { it.qualityId == requestedQualityId }
       val ceiling = minOf(serverQuality.takeIf { it > 0 } ?: requestedQualityId, requestedQualityId)
-      selectBoundedHardwareAvcTracks(videoTracks, ceiling, requestLimit, allowLevelTrial && audioTracks.isNotEmpty()) { track ->
+      val trial = if (audioTracks.isNotEmpty()) levelTrial else LevelTrialAvailability.Unavailable
+      selectBoundedHardwareAvcTracks(videoTracks, ceiling, requestLimit, trial) { track ->
         playbackContext?.let { HardwareAvcDecoders.assess(it, track) }
           ?: AvcTrackAssessment(AvcTrackDecision.CapabilityUnknown)
       }
@@ -305,7 +306,7 @@ class PlaybackRepository(
       val best = selectedQualityTracks.firstOrNull()
       val reason = when {
         audioTracks.isEmpty() -> "NO_AUDIO"
-        best != null -> selectionMode.name
+        best != null || selectionMode == PlaybackVideoSelectionMode.LevelTrialUsed -> selectionMode.name
         rawVideo.isNullOrEmpty() -> "NO_VIDEO"
         videoTracks.isEmpty() -> "NO_VIDEO_URL"
         avcSelection != null -> avcSelection.evaluations.map { it.assessment.decision.name }.distinct().joinToString("-")

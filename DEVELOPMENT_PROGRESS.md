@@ -104,6 +104,16 @@
 | 同版本复核包交付 | Done | 最终源码增量复验通过，157 项 JVM 单测通过，Debug、AndroidTest 和 ARMv7 诊断 Release 均构建成功。R8、资源裁剪和 Lint Vital 通过，版本为 1.0.7-chevy（107），最低 API 23。APK 通过 V1/V2 验签，与初版 1.0.7 和 1.0.6 的证书一致。交付目录为 `BiliTVNative-1.0.7-chevy-playback-diagnostics-review`，APK SHA-256 为 `11f073d6c710fa165cab24b73b00699a0d547cf6f8d32fb9c832ea01b82f28c3`，目录内校验文件已复验。 |
 | 实车与设备端验证 | Pending | ADB 无设备，AndroidTest 实际执行、实车播放和 Flutter 对照待验证。 |
 
+## 畅巡实机首帧后停滞（2026-11-24）
+
+| 任务 | 状态 | 验收/备注 |
+| --- | --- | --- |
+| 核对截图与公开流 | Done | `BV1aAnB67EMg` / CID 42918674784，`#4 g5` 19:13:34.754 首帧，约 10 秒后 `D1003`。1.0.7 复核包 R8 映射将 `aq0-fb3` 还原为 `ExoPlaybackException` 和 `StuckPlayerException`，时序符合 Media3 真机默认的播放进度停滞阈值。公开流的 360P DASH 为 636×360、30 fps、AVC High Level 5.1，360P 和 480P 普通 MP4 的 `avcC` 也是 5.1。PC 仅验证了公开 DASH 开头 12 秒，视频输出 360 帧，两条 AAC-LC 48 kHz 双声道音轨解码均完成。 |
+| 错误代次和释放 | Done | 旧实现把捕获播放器的 Kotlin 函数引用存入 Compose 状态，等值比较保留了首个实例，导致 `#4 g5` 邻近的停滞错误被写入 `#1 g2`。错误监听现直接调用绑定其播放器的处理逻辑，沿用现有播放器身份和代次校验。 |
+| 停滞详情与试播用尽提示 | Done | 稳定记录 `StuckPlayerException`、停滞子类型、超时时长、播放位置和缓冲数据。调试级别记录播放器状态及音频解码器、格式、输出推进相关事件。360P 已用过试播且仍有仅受 Level 限制的候选时，重试显示 `LEVEL_TRIAL_USED`。 |
+| 同版本停滞诊断包交付 | Done | 159 项 JVM 单测通过，Debug、AndroidTest 和 ARMv7 诊断 Release 构建成功。Release 经 R8、资源裁剪、V1/V2 验签及 SHA-256 校验，包名 `com.kirin.bilitv`，版本 1.0.7-chevy（107），最低 API 23，同签名交付至 `BiliTVNative-1.0.7-chevy-stall-diagnostics`。APK SHA-256 为 `a74818e369385c514974ccc01f3e58672e8f014cecc1c104ad16c017493f66ed`。 |
+| 持续播放实机验收 | Pending | ADB 无设备。首帧后停滞的设备侧触发点待用新日志确认，设备端 AndroidTest 和 Flutter 对照待验证。 |
+
 ## 畅巡本地模拟器可行性（2026-11-23）
 
 | 任务 | 状态 | 验收/备注 |
