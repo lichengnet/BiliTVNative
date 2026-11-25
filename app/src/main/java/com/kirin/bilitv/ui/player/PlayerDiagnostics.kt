@@ -4,6 +4,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
 import com.kirin.bilitv.core.device.PlaybackLogLevel
 import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.player.PlaybackTrace
@@ -30,6 +31,9 @@ internal fun playerDiagnostics(
   override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
     if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_DECODER_READY", mapOf("decoder" to decoderName), PlaybackLogLevel.Debug)
   }
+  override fun onAudioDecoderReleased(eventTime: AnalyticsListener.EventTime, decoderName: String) {
+    if (isCurrent()) trace()?.event(SessionEvent.PLAY_RELEASE, "AUDIO_DECODER_RELEASED", mapOf("decoder" to decoderName), PlaybackLogLevel.Debug)
+  }
   override fun onAudioInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
     if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_FORMAT", mapOf(
       "codec" to (format.codecs ?: format.sampleMimeType?.substringAfter('/') ?: "UNKNOWN"),
@@ -41,6 +45,10 @@ internal fun playerDiagnostics(
       audioPositionAdvancing()
       trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_ADVANCING", level = PlaybackLogLevel.Debug)
     }
+  }
+  override fun onAudioTrackInitialized(eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig) {
+    if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_OUTPUT_READY",
+      mapOf("sampleRate" to audioTrackConfig.sampleRate.toString()), PlaybackLogLevel.Debug)
   }
   override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
     if (isCurrent()) trace()?.event(SessionEvent.PLAY_FAILURE, "AUDIO_SINK", playerFailureFields(audioSinkError))

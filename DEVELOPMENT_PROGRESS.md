@@ -124,6 +124,15 @@
 | 同版本起播恢复包交付 | Done | 163 项 JVM 单测通过，Debug、AndroidTest 和 ARMv7 诊断 Release 构建成功。Release 经 R8、资源裁剪、ZIP 对齐、V1/V2 同签名验签及 SHA-256 校验，包名 `com.kirin.bilitv`，版本 1.0.7-chevy（107），最低 API 23。交付目录为 `BiliTVNative-1.0.7-chevy-startup-recovery`，APK SHA-256 为 `73ed54b5d10bcb842f29bd04e93e5b6227a36ab69182af4f2a782d6f4b42d451`。 |
 | 实车持续播放复验 | Pending | ADB 无设备。需要复测过去可播的视频及 `BV1KPxg6rEoX` 的续播点，确认音频和画面能持续推进。设备端 AndroidTest 和 Flutter 对照待验证。 |
 
+## 畅巡音频渲染器恢复（2026-11-25）
+
+| 任务 | 状态 | 验收/备注 |
+| --- | --- | --- |
+| 核对之前可播样本的停滞 | Done | 新疆小院 `BV1Eup46hELb` / CID 42594536356，第 1 次尝试 10:14:05.937 出首帧，10:14:09.725 提交音频会话切换，10:14:20.444 仍在 329700 ms 报 `D1003 / PLAYING_NO_PROGRESS`。公开接口另有 480P AVC High Level 3.1 和 360P AVC High Level 3.0，车机日志截图未显示当次选中的视频轨。 |
+| 复位音频解码和输出 | Done | 复用首帧后 3 秒停滞检测。畅巡每个播放器最多一次临时禁用音频轨类型，等 Media3 发布禁用后的选轨结果再恢复音频，让 Media3 释放音频解码器和输出后重新初始化。2 秒未确认时由进度循环恢复音频选择，暂停或离开前台时也恢复。调试日志记录音频解码器释放、AudioTrack 初始化和音频位置推进。JVM 单测覆盖恢复确认、超时和暂停。 |
+| 同版本诊断包交付 | Done | 166 项 JVM 单测通过，Debug、AndroidTest 和 ARMv7 诊断 Release 构建成功。已验证 R8、资源裁剪、ZIP 对齐、Release 中的恢复代码、API 23、包名 `com.kirin.bilitv` 和 1.0.7-chevy（107）版本信息，V1/V2 签名证书与 1.0.6 和上一份 1.0.7 一致。交付目录为 `BiliTVNative-1.0.7-chevy-audio-renderer-recovery`，APK SHA-256 为 `e5d531b6a51cd17c7c6a138d80ce298f1dd69ae43a440b9a691f5c79d3616875`。 |
+| 实车复测 | Pending | ADB 无设备且 Flutter 参考工程不可用。实车验证 5:29.700 续播点附近的画面、声音和进度，并观察音频渲染器复位后的日志。 |
+
 ## 畅巡本地模拟器可行性（2026-11-23）
 
 | 任务 | 状态 | 验收/备注 |

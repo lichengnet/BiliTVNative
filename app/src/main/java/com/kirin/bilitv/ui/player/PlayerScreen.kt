@@ -83,6 +83,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
@@ -266,7 +267,9 @@ fun PlayerScreen(
   val player = remember(context, playerGeneration) { createCompatiblePlayer(context, compatibility.isJacinto6) }
   val outputSession = remember(player) { PlayerOutputSession(player) }
   val audioStartupRecovery = remember(outputSession, compatibility.isJacinto6) {
-    if (compatibility.isJacinto6) AudioStartupRecovery(BiliMotion.PlayerAudioStartupStallMs) else null
+    if (compatibility.isJacinto6) {
+      AudioStartupRecovery(BiliMotion.PlayerAudioStartupStallMs, BiliMotion.PlayerAudioTrackDisableTimeoutMs)
+    } else null
   }
   val playbackLogSession = remember { outputSession.diagnosticId }
   val latestOutputSession = rememberUpdatedState(outputSession)
@@ -1191,6 +1194,16 @@ fun PlayerScreen(
       playerLoadStateHolder.fail("", kind, code)
     }
   }
+
+  fun restoreStartupAudio(nowMs: Long, audioSelected: Boolean, keepWaiting: Boolean) {
+    if (outputSession.isReleased || outputSession.mediaGeneration != recoveryPolicy.generation) return
+    val reason = audioStartupRecovery?.restoreReason(nowMs, audioSelected, keepWaiting) ?: return
+    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+      .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build()
+    outputSession.trace?.event(SessionEvent.PLAY_RECOVERY, "AUDIO_RENDERER_REENABLE",
+      mapOf("reason" to reason.name) + playbackSignalFields(player))
+  }
+
   DisposableEffect(player) {
     fun isCurrent(): Boolean = !outputSession.isReleased && latestOutputSession.value === outputSession &&
       (!compatibility.isJacinto6 || outputSession.mediaGeneration == latestRecoveryPolicy.value.generation)
@@ -1209,6 +1222,13 @@ fun PlayerScreen(
 
       override fun onRenderedFirstFrame() {
         if (isCurrent()) outputSession.onFirstFrame()
+      }
+
+      override fun onTracksChanged(tracks: Tracks) {
+        // Media3 publishes the new tracks after it resets the disabled audio renderer.
+        if (audioStartupRecovery != null && isCurrent() && !tracks.isTypeSelected(C.TRACK_TYPE_AUDIO)) {
+          restoreStartupAudio(SystemClock.elapsedRealtime(), audioSelected = false, keepWaiting = true)
+        }
       }
 
       override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -1258,7 +1278,13 @@ fun PlayerScreen(
           checkpointPlaybackSession(currentPlaybackPositionMs(playbackPositionState.longValue))
           saveAndReportProgress()
           releasePlaybackWakeLock()
-          if (!outputSession.isReleased) player.pause()
+          if (!outputSession.isReleased) {
+            player.pause()
+            if (audioStartupRecovery != null) {
+              restoreStartupAudio(SystemClock.elapsedRealtime(),
+                player.currentTracks.isTypeSelected(C.TRACK_TYPE_AUDIO), keepWaiting = false)
+            }
+          }
         }
         Lifecycle.Event.ON_RESUME -> {
           if (playbackResourcesAllowed) acquirePlaybackWakeLock()
@@ -1442,25 +1468,19 @@ fun PlayerScreen(
       if (playerState is PlayerScreenState.Ready && positionApplied && player.mediaItemCount > 0) {
         recoveryPolicy.updatePosition(playerPositionMs)
       }
-      if (audioStartupRecovery != null && audioStartupRecovery.shouldRestart(
-          nowMs, playerPositionMs,
-          eligible = playerState is PlayerScreenState.Ready && positionApplied && outputSession.hasRenderedFirstFrame &&
-            outputSession.mediaGeneration == recoveryPolicy.generation && playerExitJob?.isActive != true &&
-            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && previewPositionMs == null &&
-            !touchGestureSeekActive && player.isPlaying && player.currentTracks.isTypeSelected(C.TRACK_TYPE_AUDIO),
-        )
-      ) {
-        val phase = try {
-          val sessionId = audioManager?.generateAudioSessionId() ?: AudioManager.ERROR
-          if (sessionId > 0 && sessionId != player.audioSessionId) {
-            // Media3 flushes and recreates the audio sink for a new session ID.
-            player.audioSessionId = sessionId
-            "AUDIO_OUTPUT_RESTART"
-          } else "AUDIO_OUTPUT_RESTART_UNAVAILABLE"
-        } catch (_: RuntimeException) {
-          "AUDIO_OUTPUT_RESTART_FAILED"
+      if (audioStartupRecovery != null && outputSession.mediaGeneration == recoveryPolicy.generation) {
+        val audioSelected = player.currentTracks.isTypeSelected(C.TRACK_TYPE_AUDIO)
+        val mayRecover = playerState is PlayerScreenState.Ready && positionApplied && outputSession.hasRenderedFirstFrame &&
+          playerExitJob?.isActive != true && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+          previewPositionMs == null && !touchGestureSeekActive
+        if (audioStartupRecovery.shouldRestart(nowMs, playerPositionMs, mayRecover && player.isPlaying && audioSelected)) {
+          outputSession.trace?.event(SessionEvent.PLAY_RECOVERY, "AUDIO_RENDERER_DISABLE",
+            playbackSignalFields(player))
+          player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true).build()
+        } else {
+          restoreStartupAudio(nowMs, audioSelected, keepWaiting = mayRecover && player.playWhenReady)
         }
-        outputSession.trace?.event(SessionEvent.PLAY_RECOVERY, phase, playbackSignalFields(player))
       }
       playbackDurationState.longValue = player.duration.takeIf { it != C.TIME_UNSET }
         ?: playbackDurationState.longValue
