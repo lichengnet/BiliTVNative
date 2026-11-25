@@ -265,12 +265,21 @@ fun PlayerScreen(
   var lastSessionInput by remember { mutableStateOf<Triple<PlaybackRequest, PlaybackQualityPreference, PlaybackCodecPreference>?>(null) }
   val player = remember(context, playerGeneration) { createCompatiblePlayer(context, compatibility.isJacinto6) }
   val outputSession = remember(player) { PlayerOutputSession(player) }
+  val audioStartupRecovery = remember(outputSession, compatibility.isJacinto6) {
+    if (compatibility.isJacinto6) AudioStartupRecovery(BiliMotion.PlayerAudioStartupStallMs) else null
+  }
   val playbackLogSession = remember { outputSession.diagnosticId }
   val latestOutputSession = rememberUpdatedState(outputSession)
   val latestRecoveryPolicy = rememberUpdatedState(recoveryPolicy)
   var playerView by remember { mutableStateOf<PlayerView?>(null) }
   val playbackWakeLock = remember(context) {
     context.applicationContext.createPlayerWakeLock()
+  }
+
+  fun currentPlaybackPositionMs(fallbackMs: Long): Long = when {
+    compatibility.isJacinto6 && !outputSession.startPositionApplied -> recoveryPolicy.lastPositionMs
+    outputSession.isReleased -> fallbackMs
+    else -> player.currentPosition.takeIf { it >= 0L } ?: fallbackMs
   }
 
   fun checkpointPlaybackSession(positionMs: Long) {
@@ -525,7 +534,7 @@ fun PlayerScreen(
 
   suspend fun saveProgressNow() {
     val state = playerState as? PlayerScreenState.Ready ?: return
-    val currentPositionMs = player.currentPosition.takeIf { it >= 0L } ?: 0L
+    val currentPositionMs = currentPlaybackPositionMs(fallbackMs = 0L)
     val currentDurationMs = player.duration.takeIf { it != C.TIME_UNSET }
       ?: playbackDurationState.longValue
     playbackRepository.saveProgress(
@@ -539,7 +548,7 @@ fun PlayerScreen(
   suspend fun reportProgressNow(overrideProgressSeconds: Int? = null) {
     val state = playerState as? PlayerScreenState.Ready ?: return
     val progressSeconds = overrideProgressSeconds
-      ?: ((player.currentPosition.takeIf { it >= 0L } ?: playbackPositionState.longValue).coerceAtLeast(0L) / 1000L).toInt()
+      ?: (currentPlaybackPositionMs(playbackPositionState.longValue).coerceAtLeast(0L) / 1000L).toInt()
     playbackRepository.reportProgress(
       bvid = state.info.bvid,
       cid = state.info.cid,
@@ -910,7 +919,7 @@ fun PlayerScreen(
         val previousRequest = playerLoadStateHolder.viewState.activeRequest
         playerLoadStateHolder.selectQuality(
           quality = quality,
-          startPositionMs = player.currentPosition.takeIf { it >= 0L } ?: playbackPositionState.longValue,
+          startPositionMs = currentPlaybackPositionMs(playbackPositionState.longValue),
         )
         val nextRequest = playerLoadStateHolder.viewState.activeRequest
         if (previousRequest != nextRequest) {
@@ -1156,7 +1165,7 @@ fun PlayerScreen(
     }
     val ready = playerLoadStateHolder.viewState.screenState as? PlayerScreenState.Ready
     if (!outputSession.isReleased && ready != null) {
-      if (player.mediaItemCount > 0) recoveryPolicy.updatePosition(player.currentPosition)
+      if (outputSession.startPositionApplied && player.mediaItemCount > 0) recoveryPolicy.updatePosition(player.currentPosition)
       val position = recoveryPolicy.lastPositionMs
       val duration = player.duration.takeIf { it != C.TIME_UNSET } ?: playbackDurationState.longValue
       coroutineScope.launch {
@@ -1185,8 +1194,12 @@ fun PlayerScreen(
   DisposableEffect(player) {
     fun isCurrent(): Boolean = !outputSession.isReleased && latestOutputSession.value === outputSession &&
       (!compatibility.isJacinto6 || outputSession.mediaGeneration == latestRecoveryPolicy.value.generation)
-    val diagnostics = if (CompatibilityDiagnostics.enabled) {
-      playerDiagnostics(trace = { outputSession.trace }, isCurrent = ::isCurrent)
+    val diagnostics = if (CompatibilityDiagnostics.enabled || audioStartupRecovery != null) {
+      playerDiagnostics(
+        trace = { outputSession.trace },
+        isCurrent = ::isCurrent,
+        audioPositionAdvancing = { audioStartupRecovery?.onAudioPositionAdvancing() },
+      )
     } else null
     diagnostics?.let(player::addAnalyticsListener)
     val listener = object : Player.Listener {
@@ -1200,6 +1213,7 @@ fun PlayerScreen(
 
       override fun onIsPlayingChanged(isPlaying: Boolean) {
         if (!isCurrent()) return
+        if (!isPlaying) audioStartupRecovery?.interrupt()
         playerActuallyPlaying = isPlaying
         val pausedByUser = !isPlaying && !player.playWhenReady && player.playbackState != Player.STATE_ENDED
         playbackPaused = pausedByUser
@@ -1240,16 +1254,17 @@ fun PlayerScreen(
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
         Lifecycle.Event.ON_PAUSE -> {
-          checkpointPlaybackSession(
-            if (!outputSession.isReleased) player.currentPosition.takeIf { position -> position >= 0L } ?: playbackPositionState.longValue else playbackPositionState.longValue,
-          )
+          audioStartupRecovery?.interrupt()
+          checkpointPlaybackSession(currentPlaybackPositionMs(playbackPositionState.longValue))
           saveAndReportProgress()
           releasePlaybackWakeLock()
           if (!outputSession.isReleased) player.pause()
         }
         Lifecycle.Event.ON_RESUME -> {
           if (playbackResourcesAllowed) acquirePlaybackWakeLock()
-          if (playerState is PlayerScreenState.Ready && !outputSession.isReleased && !recoveryPolicy.pausedByUser) {
+          if (playerState is PlayerScreenState.Ready && !outputSession.isReleased && !recoveryPolicy.pausedByUser &&
+            (!compatibility.isJacinto6 || outputSession.startPositionApplied)
+          ) {
             player.play()
           }
         }
@@ -1351,6 +1366,7 @@ fun PlayerScreen(
     }
     recoveryPolicy.accepted(readyState.info)
     recoveryPolicy.updatePosition(readyState.startPositionMs)
+    playbackPositionState.longValue = readyState.startPositionMs
     checkpointPlaybackSession(readyState.startPositionMs)
     try {
       val info = readyState.info
@@ -1369,7 +1385,13 @@ fun PlayerScreen(
       outputSession.mediaGeneration = preparationToken
       outputSession.trace?.event(SessionEvent.PLAY_ATTEMPT, "OUTPUT_READY",
         mapOf("source" to if (compatibility.useTextureView) "TextureView" else "SurfaceView"), PlaybackLogLevel.Debug)
-      player.setMediaSource(mediaSource, readyState.startPositionMs)
+      if (compatibility.isJacinto6) {
+        // Restore the startup order used by the 1.0.6 Chevy build when resuming DASH.
+        player.playWhenReady = false
+        player.setMediaSource(mediaSource)
+      } else {
+        player.setMediaSource(mediaSource, readyState.startPositionMs)
+      }
       val levelTrial = info.videoSelectionMode == PlaybackVideoSelectionMode.LevelTrial
       if (levelTrial) {
         if (!recoveryPolicy.submitLevelTrial(preparationToken, info)) {
@@ -1381,9 +1403,10 @@ fun PlayerScreen(
       player.prepare()
       player.setPlaybackSpeed(playbackSpeed)
       if (readyState.startPositionMs > 0L) {
-        playbackPositionState.longValue = readyState.startPositionMs
+        if (compatibility.isJacinto6) player.seekTo(readyState.startPositionMs)
         danmakuSyncToken += 1L
       }
+      outputSession.startPositionApplied = true
       player.playWhenReady = !compatibility.isJacinto6 ||
         (!recoveryPolicy.pausedByUser && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
       playbackPaused = compatibility.isJacinto6 && recoveryPolicy.pausedByUser
@@ -1413,10 +1436,31 @@ fun PlayerScreen(
       if (outputSession.isReleased) return@LaunchedEffect
       val nowMs = SystemClock.elapsedRealtime()
       val playerPositionMs = player.currentPosition
-      val currentPositionMs = playerPositionMs.coerceAtLeast(0L)
+      val positionApplied = !compatibility.isJacinto6 || outputSession.startPositionApplied
+      val currentPositionMs = if (positionApplied) playerPositionMs.coerceAtLeast(0L) else recoveryPolicy.lastPositionMs
       playbackPositionState.longValue = currentPositionMs
-      if (playerState is PlayerScreenState.Ready && player.mediaItemCount > 0) {
+      if (playerState is PlayerScreenState.Ready && positionApplied && player.mediaItemCount > 0) {
         recoveryPolicy.updatePosition(playerPositionMs)
+      }
+      if (audioStartupRecovery != null && audioStartupRecovery.shouldRestart(
+          nowMs, playerPositionMs,
+          eligible = playerState is PlayerScreenState.Ready && positionApplied && outputSession.hasRenderedFirstFrame &&
+            outputSession.mediaGeneration == recoveryPolicy.generation && playerExitJob?.isActive != true &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && previewPositionMs == null &&
+            !touchGestureSeekActive && player.isPlaying && player.currentTracks.isTypeSelected(C.TRACK_TYPE_AUDIO),
+        )
+      ) {
+        val phase = try {
+          val sessionId = audioManager?.generateAudioSessionId() ?: AudioManager.ERROR
+          if (sessionId > 0 && sessionId != player.audioSessionId) {
+            // Media3 flushes and recreates the audio sink for a new session ID.
+            player.audioSessionId = sessionId
+            "AUDIO_OUTPUT_RESTART"
+          } else "AUDIO_OUTPUT_RESTART_UNAVAILABLE"
+        } catch (_: RuntimeException) {
+          "AUDIO_OUTPUT_RESTART_FAILED"
+        }
+        outputSession.trace?.event(SessionEvent.PLAY_RECOVERY, phase, playbackSignalFields(player))
       }
       playbackDurationState.longValue = player.duration.takeIf { it != C.TIME_UNSET }
         ?: playbackDurationState.longValue

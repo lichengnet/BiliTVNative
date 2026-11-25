@@ -39,7 +39,9 @@ internal class PlayerOutputSession(private val player: Player) {
     private set
   val diagnosticId: Int = nextId.incrementAndGet()
   var mediaGeneration: Long? = null
+  var startPositionApplied: Boolean = false
   var trace: PlaybackTrace? = null
+  val hasRenderedFirstFrame: Boolean get() = !isReleased && firstFrame.isCompleted
 
   fun onFirstFrame() {
     if (!isReleased) firstFrame.complete(Unit)

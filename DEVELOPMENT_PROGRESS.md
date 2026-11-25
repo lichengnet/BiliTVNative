@@ -114,6 +114,16 @@
 | 同版本停滞诊断包交付 | Done | 159 项 JVM 单测通过，Debug、AndroidTest 和 ARMv7 诊断 Release 构建成功。Release 经 R8、资源裁剪、V1/V2 验签及 SHA-256 校验，包名 `com.kirin.bilitv`，版本 1.0.7-chevy（107），最低 API 23，同签名交付至 `BiliTVNative-1.0.7-chevy-stall-diagnostics`。APK SHA-256 为 `a74818e369385c514974ccc01f3e58672e8f014cecc1c104ad16c017493f66ed`。 |
 | 持续播放实机验收 | Pending | ADB 无设备。首帧后停滞的设备侧触发点待用新日志确认，设备端 AndroidTest 和 Flutter 对照待验证。 |
 
+## 畅巡既有视频起播回归（2026-11-25）
+
+| 任务 | 状态 | 验收/备注 |
+| --- | --- | --- |
+| 核对实机链路和故障点附近媒体数据 | Done | `BV1KPxg6rEoX` / CID 43101062376，前三次 `VIDEO_TRACKS`，第 4 次 360P 试播在 09:20:22.966 出首帧，09:20:32.991 同代次报 `PLAYING_NO_PROGRESS`，位置 142013 ms。截图显示音频解码器就绪与输入格式事件，未见 `AUDIO_ADVANCING`。Media3 在派发该错误前已切到 IDLE 并清空缓冲读数。公开 DASH 的 480P 和 360P 均为 AVC High Level 5.1，电脑可解码故障点附近的 360P 视频和三条 AAC 音轨各 8 秒。 |
+| 恢复畅巡续播准备顺序 | Done | 验证 1.0.6 Debug APK 的 DEX 采用 `setMediaSource`、`prepare`、`seekTo`、`playWhenReady` 顺序，硬解预筛也调用 `MediaCodecInfo.isFormatSupported`。仅在畅巡恢复这一起播顺序，续播位置提交前沿用已解析位置。 |
+| 首帧后重建音频输出 | Done | 畅巡前台实际起播、已出首帧且音频轨已选中时，若尚未收到音频推进并持续 3 秒无位置变化，复用原进度更新循环请求一个新的音频会话，让 Media3 重建音频输出。每次准备最多一次，同一视频源和播放器继续播放。暂停、后台和位置变化会重置等待，音频推进后结束起播恢复观察。 |
+| 同版本起播恢复包交付 | Done | 163 项 JVM 单测通过，Debug、AndroidTest 和 ARMv7 诊断 Release 构建成功。Release 经 R8、资源裁剪、ZIP 对齐、V1/V2 同签名验签及 SHA-256 校验，包名 `com.kirin.bilitv`，版本 1.0.7-chevy（107），最低 API 23。交付目录为 `BiliTVNative-1.0.7-chevy-startup-recovery`，APK SHA-256 为 `73ed54b5d10bcb842f29bd04e93e5b6227a36ab69182af4f2a782d6f4b42d451`。 |
+| 实车持续播放复验 | Pending | ADB 无设备。需要复测过去可播的视频及 `BV1KPxg6rEoX` 的续播点，确认音频和画面能持续推进。设备端 AndroidTest 和 Flutter 对照待验证。 |
+
 ## 畅巡本地模拟器可行性（2026-11-23）
 
 | 任务 | 状态 | 验收/备注 |

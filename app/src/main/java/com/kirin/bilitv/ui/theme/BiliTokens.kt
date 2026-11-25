@@ -309,6 +309,7 @@ object BiliMotion {
   const val PlayerControlsAutoHideMs = 4_000L
   const val PlayerProgressUpdateMs = 500L
   const val PlayerLevelTrialFirstFrameTimeoutMs = 12_000L
+  const val PlayerAudioStartupStallMs = 3_000L
   const val PlayerSeekPreviewAutoCommitMs = 1_200L
   const val PlayerClockUpdateMs = 30_000L
   const val TouchPullRefreshSpinnerRotationMs = 720

@@ -9,7 +9,11 @@ import com.kirin.bilitv.core.device.SessionEvent
 import com.kirin.bilitv.core.player.PlaybackTrace
 import com.kirin.bilitv.core.player.playbackFormatFields
 
-internal fun playerDiagnostics(trace: () -> PlaybackTrace?, isCurrent: () -> Boolean): AnalyticsListener = object : AnalyticsListener {
+internal fun playerDiagnostics(
+  trace: () -> PlaybackTrace?,
+  isCurrent: () -> Boolean,
+  audioPositionAdvancing: () -> Unit,
+): AnalyticsListener = object : AnalyticsListener {
   override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
     if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "DECODER_READY", mapOf("decoder" to decoderName))
   }
@@ -33,7 +37,10 @@ internal fun playerDiagnostics(trace: () -> PlaybackTrace?, isCurrent: () -> Boo
     ), PlaybackLogLevel.Debug)
   }
   override fun onAudioPositionAdvancing(eventTime: AnalyticsListener.EventTime, playoutStartSystemTimeMs: Long) {
-    if (isCurrent()) trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_ADVANCING", level = PlaybackLogLevel.Debug)
+    if (isCurrent()) {
+      audioPositionAdvancing()
+      trace()?.event(SessionEvent.PLAY_ATTEMPT, "AUDIO_ADVANCING", level = PlaybackLogLevel.Debug)
+    }
   }
   override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
     if (isCurrent()) trace()?.event(SessionEvent.PLAY_FAILURE, "AUDIO_SINK", playerFailureFields(audioSinkError))
